@@ -146,7 +146,7 @@ mod rasterizer {
         let mut scale_ctx = swash::scale::ScaleContext::new();
         let image = rasterize_glyph(
             &mut scale_ctx,
-            &entry.data,
+            entry.bytes(),
             entry.face_index,
             entry.swash_cache_key,
             glyph_id,
@@ -173,7 +173,7 @@ mod rasterizer {
         let mut scale_ctx = swash::scale::ScaleContext::new();
         let image = rasterize_glyph(
             &mut scale_ctx,
-            &entry.data,
+            entry.bytes(),
             entry.face_index,
             entry.swash_cache_key,
             glyph_id,
@@ -205,7 +205,7 @@ mod rasterizer {
         let mut scale_ctx = swash::scale::ScaleContext::new();
         let small = rasterize_glyph(
             &mut scale_ctx,
-            &entry.data,
+            entry.bytes(),
             entry.face_index,
             entry.swash_cache_key,
             glyph_id,
@@ -215,7 +215,7 @@ mod rasterizer {
         .unwrap();
         let large = rasterize_glyph(
             &mut scale_ctx,
-            &entry.data,
+            entry.bytes(),
             entry.face_index,
             entry.swash_cache_key,
             glyph_id,
@@ -246,7 +246,7 @@ mod rasterizer {
         let mut scale_ctx = swash::scale::ScaleContext::new();
         let image = rasterize_glyph(
             &mut scale_ctx,
-            &entry.data,
+            entry.bytes(),
             entry.face_index,
             entry.swash_cache_key,
             glyph_id,

@@ -4,11 +4,26 @@ use fontdb::{Database, Family, Query, Source, Style, Weight};
 
 use crate::types::FontFaceId;
 
+/// Byte container owned by a [`FontEntry`]. Erased behind a trait
+/// object so the registry can hold any of `Vec<u8>`, `memmap2::Mmap`,
+/// or `&'static [u8]` (via a wrapper) without copying. fontdb's
+/// `Source::Binary` uses the same shape, so the same `Arc` can be
+/// shared with the database.
+pub type SharedFontData = Arc<dyn AsRef<[u8]> + Sync + Send>;
+
 pub struct FontEntry {
     pub fontdb_id: fontdb::ID,
     pub face_index: u32,
-    pub data: Arc<Vec<u8>>,
+    pub data: SharedFontData,
     pub swash_cache_key: swash::CacheKey,
+}
+
+impl FontEntry {
+    /// Borrow the underlying font bytes. Two `as_ref()` hops:
+    /// `Arc<dyn AsRef<[u8]>>` → `&(dyn AsRef<[u8]>)` → `&[u8]`.
+    pub fn bytes(&self) -> &[u8] {
+        (*self.data).as_ref()
+    }
 }
 
 pub struct FontRegistry {
@@ -38,9 +53,26 @@ impl FontRegistry {
 
     /// Register a font from raw bytes. Returns IDs for all faces found
     /// (font collections may contain multiple faces).
+    ///
+    /// This copies the bytes into an owned `Vec<u8>`. For large fonts
+    /// where the caller already holds the data in a shareable
+    /// container (e.g. an `Arc<Mmap>` for a system emoji font), use
+    /// [`register_font_shared`](Self::register_font_shared) instead to
+    /// avoid the copy.
     pub fn register_font(&mut self, data: &[u8]) -> Vec<FontFaceId> {
-        let arc_data: Arc<Vec<u8>> = Arc::new(data.to_vec());
-        let source = Source::Binary(arc_data.clone());
+        let arc_data: SharedFontData = Arc::new(data.to_vec());
+        self.register_font_shared(arc_data)
+    }
+
+    /// Register a font from a pre-built shared byte container,
+    /// avoiding the copy that [`register_font`](Self::register_font)
+    /// would perform.
+    ///
+    /// The shared container is held by every resulting [`FontEntry`]
+    /// and by fontdb's `Source::Binary`. Drop it after the registry
+    /// drops the entries.
+    pub fn register_font_shared(&mut self, data: SharedFontData) -> Vec<FontFaceId> {
+        let source = Source::Binary(data.clone());
         let fontdb_ids = self.fontdb.load_font_source(source);
 
         let mut face_ids = Vec::new();
@@ -51,7 +83,7 @@ impl FontRegistry {
             let entry = FontEntry {
                 fontdb_id,
                 face_index,
-                data: arc_data.clone(),
+                data: data.clone(),
                 swash_cache_key,
             };
 
@@ -70,8 +102,20 @@ impl FontRegistry {
         weight: u16,
         italic: bool,
     ) -> Vec<FontFaceId> {
-        let arc_data: Arc<Vec<u8>> = Arc::new(data.to_vec());
-        let source = Source::Binary(arc_data.clone());
+        let arc_data: SharedFontData = Arc::new(data.to_vec());
+        self.register_font_shared_as(arc_data, family, weight, italic)
+    }
+
+    /// Like [`register_font_as`](Self::register_font_as) but takes a
+    /// pre-built shared byte container, avoiding the copy.
+    pub fn register_font_shared_as(
+        &mut self,
+        data: SharedFontData,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> Vec<FontFaceId> {
+        let source = Source::Binary(data.clone());
         let fontdb_ids = self.fontdb.load_font_source(source);
 
         let mut face_ids = Vec::new();
@@ -91,7 +135,7 @@ impl FontRegistry {
                 let entry = FontEntry {
                     fontdb_id: new_id,
                     face_index,
-                    data: arc_data.clone(),
+                    data: data.clone(),
                     swash_cache_key,
                 };
 

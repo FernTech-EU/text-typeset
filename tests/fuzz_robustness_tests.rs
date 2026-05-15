@@ -45,11 +45,7 @@ fn arb_short_text() -> impl Strategy<Value = String> {
 // invalid input; the layout must not panic, but behaviour is
 // undefined.
 fn arb_width() -> impl Strategy<Value = f32> {
-    prop_oneof![
-        Just(0.0_f32),
-        Just(1.0_f32),
-        0.5f32..2000.0_f32,
-    ]
+    prop_oneof![Just(0.0_f32), Just(1.0_f32), 0.5f32..2000.0_f32,]
 }
 
 // ── Property: layout_paragraph never panics ─────────────────────────
@@ -266,7 +262,7 @@ fn seed_corpus_adversarial_text() {
         "🇫🇷 flag",
         "e\u{0301}X combining acute",
         "שלום hello", // hebrew + latin
-        "العربية",     // arabic
+        "العربية",    // arabic
         "\u{FEFF}BOM prefix",
     ];
     let mut ts = make_typesetter();

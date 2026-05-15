@@ -664,7 +664,7 @@ fn render_run_glyphs(
             cache,
             atlas,
             scale_context,
-            &entry.data,
+            entry.bytes(),
             entry.face_index,
             entry.swash_cache_key,
             physical_size_px,

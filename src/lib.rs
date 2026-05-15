@@ -98,4 +98,5 @@ pub use types::{
 };
 
 pub use document_flow::{ContentWidthMode, DocumentFlow, RelayoutError};
+pub use font::SharedFontData;
 pub use font_service::{AtlasSnapshot, TextFontService};

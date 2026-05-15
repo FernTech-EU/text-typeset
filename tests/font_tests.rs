@@ -75,9 +75,9 @@ fn font_entry_has_valid_data() {
     assert!(entry.is_some());
     let entry = entry.unwrap();
     // Font data should be non-empty
-    assert!(!entry.data.is_empty());
+    assert!(!entry.bytes().is_empty());
     // Should be parseable as a font
-    let font_ref = swash::FontRef::from_index(&entry.data, entry.face_index as usize);
+    let font_ref = swash::FontRef::from_index(entry.bytes(), entry.face_index as usize);
     assert!(font_ref.is_some());
 }
 
@@ -292,8 +292,7 @@ fn default_line_height_matches_manual_metrics() {
     let face = ts.register_font(NOTO_SANS);
     ts.set_default_font(face, 14.0);
 
-    let resolved =
-        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
     let expected = metrics.ascent + metrics.descent + metrics.leading;
 
@@ -323,7 +322,10 @@ fn measure_line_height_scales_with_font_size() {
     });
 
     assert!(small > 0.0);
-    assert!(large > small * 3.5, "48px should be roughly 4× 12px line-height");
+    assert!(
+        large > small * 3.5,
+        "48px should be roughly 4× 12px line-height"
+    );
 }
 
 #[test]
@@ -332,7 +334,9 @@ fn measure_line_height_default_format_matches_default_line_height() {
     let face = ts.register_font(NOTO_SANS);
     ts.set_default_font(face, 18.0);
 
-    let via_measure = ts.service.measure_line_height(&text_typeset::TextFormat::default());
+    let via_measure = ts
+        .service
+        .measure_line_height(&text_typeset::TextFormat::default());
     let via_default = ts.service.default_line_height();
     assert!((via_measure - via_default).abs() < 0.001);
 }

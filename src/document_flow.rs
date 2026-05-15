@@ -1538,7 +1538,7 @@ fn rasterize_glyph_quad(
     if service.glyph_cache.peek(&cache_key).is_none()
         && let Some(image) = rasterize_glyph(
             &mut service.scale_context,
-            &entry.data,
+            entry.bytes(),
             entry.face_index,
             entry.swash_cache_key,
             glyph.glyph_id,

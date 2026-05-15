@@ -14,8 +14,7 @@
 mod helpers;
 
 use helpers::{
-    Rect, RenderFrameExt, Typesetter, make_block, make_block_at, make_cell, make_table,
-    make_typesetter,
+    Rect, RenderFrameExt, make_block, make_block_at, make_cell, make_table, make_typesetter,
 };
 use insta::{assert_debug_snapshot, assert_snapshot};
 use text_typeset::layout::paragraph::Alignment;
@@ -137,8 +136,8 @@ fn snapshot_hit_test_regions_across_line() {
     let points: Vec<(f32, f32, String)> = [
         (5.0_f32, 8.0_f32),
         (40.0, 8.0),
-        (400.0, 8.0),   // past end of line
-        (40.0, 800.0),  // below all content
+        (400.0, 8.0),  // past end of line
+        (40.0, 800.0), // below all content
     ]
     .iter()
     .map(|&(x, y)| {
@@ -239,7 +238,11 @@ fn snapshot_alignment_variations() {
         ts.layout_blocks(vec![block]);
         let frame = ts.render();
         let first_glyph = frame.glyph_rects().first().copied().map(fmt_rect);
-        out.push(format!("{:?}: first_glyph={:?}", align, first_glyph.is_some()));
+        out.push(format!(
+            "{:?}: first_glyph={:?}",
+            align,
+            first_glyph.is_some()
+        ));
     }
     assert_debug_snapshot!(out);
 }

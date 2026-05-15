@@ -137,7 +137,7 @@ pub fn shape_text_directed(
     direction: TextDirection,
 ) -> Option<ShapedRun> {
     let entry = registry.get(resolved.font_face_id)?;
-    let face = Face::from_slice(&entry.data, entry.face_index)?;
+    let face = Face::from_slice(entry.bytes(), entry.face_index)?;
 
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
@@ -216,7 +216,7 @@ pub fn shape_text_with_buffer(
     buffer: UnicodeBuffer,
 ) -> Option<(ShapedRun, UnicodeBuffer)> {
     let entry = registry.get(resolved.font_face_id)?;
-    let face = Face::from_slice(&entry.data, entry.face_index)?;
+    let face = Face::from_slice(entry.bytes(), entry.face_index)?;
 
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
@@ -289,7 +289,7 @@ pub fn shape_text_with_buffer(
 /// `scale_factor`, so callers always see logical-pixel metrics.
 pub fn font_metrics_px(registry: &FontRegistry, resolved: &ResolvedFont) -> Option<FontMetricsPx> {
     let entry = registry.get(resolved.font_face_id)?;
-    let font_ref = swash::FontRef::from_index(&entry.data, entry.face_index as usize)?;
+    let font_ref = swash::FontRef::from_index(entry.bytes(), entry.face_index as usize)?;
     let sf = resolved.scale_factor.max(f32::MIN_POSITIVE);
     let physical_size = resolved.size_px * sf;
     let metrics = font_ref.metrics(&[]).scale(physical_size);

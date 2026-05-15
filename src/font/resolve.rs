@@ -91,7 +91,7 @@ pub fn font_has_glyph(registry: &FontRegistry, face_id: FontFaceId, ch: char) ->
         Some(e) => e,
         None => return false,
     };
-    let font_ref = match swash::FontRef::from_index(&entry.data, entry.face_index as usize) {
+    let font_ref = match swash::FontRef::from_index(entry.bytes(), entry.face_index as usize) {
         Some(f) => f,
         None => return false,
     };
@@ -108,7 +108,7 @@ pub fn find_fallback_font(
         if face_id == exclude {
             continue;
         }
-        let font_ref = match swash::FontRef::from_index(&entry.data, entry.face_index as usize) {
+        let font_ref = match swash::FontRef::from_index(entry.bytes(), entry.face_index as usize) {
             Some(f) => f,
             None => continue,
         };

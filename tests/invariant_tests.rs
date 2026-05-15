@@ -13,7 +13,7 @@
 
 mod helpers;
 
-use helpers::{RenderFrameExt, Typesetter, make_block, make_typesetter};
+use helpers::{RenderFrameExt, make_block, make_typesetter};
 use proptest::prelude::*;
 use text_typeset::{CursorDisplay, TextFormat};
 

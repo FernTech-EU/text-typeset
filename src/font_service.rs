@@ -146,6 +146,25 @@ impl TextFontService {
             .expect("font data contained no faces")
     }
 
+    /// Register a font from a pre-built shared byte container,
+    /// avoiding the copy that [`register_font`](Self::register_font)
+    /// would perform.
+    ///
+    /// Pass an `Arc<Mmap>` (or any `Arc<dyn AsRef<[u8]> + Sync + Send>`)
+    /// when the caller already holds the data in a shareable form —
+    /// useful for large system fonts (color emoji) where copying to an
+    /// owned `Vec<u8>` would double the resident memory cost.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the font data contains no parseable faces.
+    pub fn register_font_shared(&mut self, data: crate::font::SharedFontData) -> FontFaceId {
+        let ids = self.font_registry.register_font_shared(data);
+        ids.into_iter()
+            .next()
+            .expect("font data contained no faces")
+    }
+
     /// Register a font with explicit metadata, overriding the font's
     /// name table. Use when the font's internal metadata is unreliable
     /// or when aliasing a font to a different family name.
@@ -163,6 +182,27 @@ impl TextFontService {
         let ids = self
             .font_registry
             .register_font_as(data, family, weight, italic);
+        ids.into_iter()
+            .next()
+            .expect("font data contained no faces")
+    }
+
+    /// Like [`register_font_as`](Self::register_font_as) but takes a
+    /// pre-built shared byte container, avoiding the copy.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the font data contains no parseable faces.
+    pub fn register_font_shared_as(
+        &mut self,
+        data: crate::font::SharedFontData,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> FontFaceId {
+        let ids = self
+            .font_registry
+            .register_font_shared_as(data, family, weight, italic);
         ids.into_iter()
             .next()
             .expect("font data contained no faces")
