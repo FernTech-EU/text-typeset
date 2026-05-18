@@ -69,6 +69,15 @@ pub struct BlockLayoutParams {
 #[derive(Clone)]
 pub struct FragmentParams {
     pub text: String,
+    /// **Byte** offset of this fragment's first character inside the
+    /// owning block's text. Lifted into glyph clusters by
+    /// [`crate::layout::paragraph::flatten_runs`] so glyph clusters
+    /// can be compared directly against `unicode-linebreak` break
+    /// positions (also bytes) and against the block-level text used
+    /// for `byte_offset_to_char_offset` conversion. Hosts threading
+    /// text-document `FragmentContent` through the bridge must
+    /// translate the char-based `FragmentContent::offset` into bytes
+    /// before assigning here.
     pub offset: usize,
     pub length: usize,
     pub font_family: Option<String>,

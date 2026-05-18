@@ -111,10 +111,43 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
         _ => 1.0,
     };
 
+    // text-document's `FragmentContent::{Text, Image}.offset` is the
+    // **character** offset of the fragment within the block. text-typeset
+    // downstream (block.rs:143 / paragraph.rs:216) treats
+    // `FragmentParams.offset` as the fragment's **byte** start in
+    // `block.text`, then adds it to glyph clusters (also bytes) to
+    // lift them into block-text byte space. The two units must
+    // agree, or any block whose first fragment carries a multi-byte
+    // character causes every subsequent fragment's glyphs to land at
+    // the wrong byte position — observed as hit-tests + formatting
+    // landing a character or two past the user's selection around
+    // em-dashes, curly quotes, accented characters, emoji, etc.
+    //
+    // Build a single char → byte index once over `block.text` (O(N)),
+    // then look each fragment's char offset up in O(1) and pass the
+    // byte offset into `convert_fragment`. The fragment stream covers
+    // the whole block text in char order, so the lookup is in range
+    // for every fragment we see.
+    let char_to_byte: Vec<usize> = block
+        .text
+        .char_indices()
+        .map(|(b, _)| b)
+        .chain(std::iter::once(block.text.len()))
+        .collect();
     let fragments: Vec<FragmentParams> = block
         .fragments
         .iter()
-        .map(|f| convert_fragment(f, heading_scale, opts))
+        .map(|f| {
+            let char_offset = match f {
+                FragmentContent::Text { offset, .. } => *offset,
+                FragmentContent::Image { offset, .. } => *offset,
+            };
+            let byte_offset = char_to_byte
+                .get(char_offset)
+                .copied()
+                .unwrap_or(block.text.len());
+            convert_fragment(f, heading_scale, opts, byte_offset)
+        })
         .collect();
 
     let indent_level = block.block_format.indent.unwrap_or(0) as f32;
@@ -177,12 +210,12 @@ fn convert_fragment(
     frag: &FragmentContent,
     heading_scale: f32,
     opts: &BridgeOptions,
+    byte_offset: usize,
 ) -> FragmentParams {
     match frag {
         FragmentContent::Text {
             text,
             format,
-            offset,
             length,
             ..
         } => {
@@ -208,7 +241,7 @@ fn convert_fragment(
                 });
             FragmentParams {
                 text: text.clone(),
-                offset: *offset,
+                offset: byte_offset,
                 length: *length,
                 font_family: format.font_family.clone(),
                 font_weight: format.font_weight,
@@ -243,11 +276,10 @@ fn convert_fragment(
             height,
             quality: _,
             format,
-            offset,
             ..
         } => FragmentParams {
             text: "\u{FFFC}".to_string(),
-            offset: *offset,
+            offset: byte_offset,
             length: 1,
             font_family: None,
             font_weight: None,
