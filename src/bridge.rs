@@ -228,17 +228,16 @@ fn convert_fragment(
                 .as_deref()
                 .map(|f| f.eq_ignore_ascii_case("monospace"))
                 .unwrap_or(false);
-            let foreground_color = format
-                .foreground_color
-                .as_ref()
-                .map(convert_color)
-                .or_else(|| {
-                    if is_monospace {
+            let foreground_color =
+                format
+                    .foreground_color
+                    .as_ref()
+                    .map(convert_color)
+                    .or(if is_monospace {
                         opts.code_block_foreground
                     } else {
                         None
-                    }
-                });
+                    });
             FragmentParams {
                 text: text.clone(),
                 offset: byte_offset,
@@ -462,11 +461,7 @@ pub fn convert_table(table: &TableSnapshot) -> TableLayoutParams {
 pub fn convert_table_with(table: &TableSnapshot, opts: &BridgeOptions) -> TableLayoutParams {
     let column_widths: Vec<f32> = table.column_widths.iter().map(|&w| w as f32).collect();
 
-    let cells: Vec<CellLayoutParams> = table
-        .cells
-        .iter()
-        .map(|c| convert_cell(c, opts))
-        .collect();
+    let cells: Vec<CellLayoutParams> = table.cells.iter().map(|c| convert_cell(c, opts)).collect();
 
     TableLayoutParams {
         table_id: table.table_id,
