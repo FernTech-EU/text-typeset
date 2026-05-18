@@ -1395,3 +1395,57 @@ fn hit_test_plain_block_has_no_table_id() {
         result.table_id
     );
 }
+
+// ── Inter-block margin gap ───────────────────────────────────────
+
+#[test]
+fn hit_test_in_inter_block_gap_snaps_to_block_above() {
+    // Two blocks at different document_positions with a generous
+    // gap between them (block 2 has top_margin=40). A click in the
+    // gap used to fall through `find_block_at_y`'s "no containing
+    // block" branch and return the LAST block in the document,
+    // which made mouse-drag selections jump from the anchor to the
+    // document end every time the pointer crossed the gap.
+    //
+    // The fix: snap to the block immediately above the gap so the
+    // selection extends naturally to end-of-block-N until the
+    // pointer crosses into block N+1's painted area.
+    let mut ts = make_typesetter();
+    let block_a = make_block_at(1, 0, "first block");
+    let mut block_b = make_block_at(2, 12, "second block");
+    block_b.top_margin = 40.0;
+    let mut block_c = make_block_at(3, 25, "third block");
+    block_c.top_margin = 40.0;
+    ts.layout_blocks(vec![block_a, block_b, block_c]);
+    ts.render();
+
+    // Find a y that falls inside the gap between block 1 and block 2:
+    // block 1's bottom edge + half the 40-px gap.
+    let line_h = 16.0_f32; // default font line height in the test rig
+    let gap_y = line_h + 20.0; // ~5 px into the gap above block 2
+
+    let hit = ts
+        .hit_test(10.0, gap_y)
+        .expect("hit_test returns Some in inter-block gap");
+    assert_eq!(
+        hit.block_id, 1,
+        "click in gap between blocks 1 and 2 should snap to block 1 \
+         (got block {}); pre-fix this returned the LAST block in the \
+         document and selections jumped to document end on every drag",
+        hit.block_id
+    );
+
+    // Same check for the gap between block 2 and block 3 — confirms
+    // the fix walks BACK from idx, not just to the document's first
+    // block.
+    let gap2_y = ts.content_height() - line_h - 20.0;
+    let hit2 = ts
+        .hit_test(10.0, gap2_y)
+        .expect("hit_test returns Some in second gap");
+    assert_eq!(
+        hit2.block_id, 2,
+        "click in gap between blocks 2 and 3 should snap to block 2 \
+         (got block {})",
+        hit2.block_id
+    );
+}

@@ -532,6 +532,23 @@ fn find_block_at_y(flow: &FlowLayout, doc_y: f32) -> Option<(usize, &BlockLayout
         }
     }
 
+    // doc_y sits in the inter-block gap created by top/bottom margins:
+    // no block contains it, but it's not below the document either.
+    // Snap to the nearest Block walking BACKWARDS from idx — i.e., the
+    // block immediately above the gap. Without this the function fell
+    // through to "return the last block of the document", which made
+    // mouse-drag selections jump from the anchor to the document end
+    // every time the pointer crossed an inter-block margin.
+    if idx < flow.flow_order.len() {
+        for i in (0..idx).rev() {
+            if let FlowItem::Block { block_id, .. } = &flow.flow_order[i]
+                && let Some(block) = flow.blocks.get(block_id)
+            {
+                return Some((*block_id, block));
+            }
+        }
+    }
+
     // Below all blocks: return the last one
     for item in flow.flow_order.iter().rev() {
         if let FlowItem::Block { block_id, .. } = item
