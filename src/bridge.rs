@@ -16,10 +16,46 @@ use crate::layout::table::{CellLayoutParams, TableLayoutParams};
 const DEFAULT_LIST_INDENT: f32 = 24.0;
 const INDENT_PER_LEVEL: f32 = 24.0;
 
+/// Per-call knobs threaded through the conversion functions so that a
+/// host widget can override defaults driven by its active theme.
+///
+/// Default values reproduce the historical pre-themed behaviour: a
+/// light-grey card behind fenced code blocks and no foreground
+/// override for monospaced runs.
+#[derive(Clone, Copy)]
+pub struct BridgeOptions {
+    /// Background painted behind blocks where `BlockFormat.is_code_block
+    /// == Some(true)` AND the block carries no explicit
+    /// `background_color`. Has no effect on prose blocks or blocks that
+    /// set their own background.
+    pub code_block_background: [f32; 4],
+    /// Foreground used for character runs whose font family resolves
+    /// to `monospace` (set by the markdown importer for inline `code`
+    /// spans and by `is_code_block` blocks). `None` keeps the
+    /// engine-level default text colour. Only applied when the run
+    /// carries no explicit `foreground_color`.
+    pub code_block_foreground: Option<[f32; 4]>,
+}
+
+impl Default for BridgeOptions {
+    fn default() -> Self {
+        Self {
+            code_block_background: [0.95, 0.95, 0.95, 1.0],
+            code_block_foreground: None,
+        }
+    }
+}
+
 /// Convert a FlowSnapshot into layout params that can be fed to a [`DocumentFlow`].
 ///
 /// [`DocumentFlow`]: crate::DocumentFlow
 pub fn convert_flow(flow: &FlowSnapshot) -> FlowElements {
+    convert_flow_with(flow, &BridgeOptions::default())
+}
+
+/// Same as [`convert_flow`] but accepts host-supplied [`BridgeOptions`]
+/// for theme-driven colour overrides.
+pub fn convert_flow_with(flow: &FlowSnapshot, opts: &BridgeOptions) -> FlowElements {
     let mut blocks = Vec::new();
     let mut tables = Vec::new();
     let mut frames = Vec::new();
@@ -27,13 +63,13 @@ pub fn convert_flow(flow: &FlowSnapshot) -> FlowElements {
     for (i, element) in flow.elements.iter().enumerate() {
         match element {
             FlowElementSnapshot::Block(block) => {
-                blocks.push((i, convert_block(block)));
+                blocks.push((i, convert_block_with(block, opts)));
             }
             FlowElementSnapshot::Table(table) => {
-                tables.push((i, convert_table(table)));
+                tables.push((i, convert_table_with(table, opts)));
             }
             FlowElementSnapshot::Frame(frame) => {
-                frames.push((i, convert_frame(frame)));
+                frames.push((i, convert_frame_with(frame, opts)));
             }
         }
     }
@@ -54,6 +90,12 @@ pub struct FlowElements {
 }
 
 pub fn convert_block(block: &BlockSnapshot) -> BlockLayoutParams {
+    convert_block_with(block, &BridgeOptions::default())
+}
+
+/// Same as [`convert_block`] but with theme-driven [`BridgeOptions`]
+/// for code-block colour overrides.
+pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockLayoutParams {
     let alignment = block
         .block_format
         .alignment
@@ -72,7 +114,7 @@ pub fn convert_block(block: &BlockSnapshot) -> BlockLayoutParams {
     let fragments: Vec<FragmentParams> = block
         .fragments
         .iter()
-        .map(|f| convert_fragment(f, heading_scale))
+        .map(|f| convert_fragment(f, heading_scale, opts))
         .collect();
 
     let indent_level = block.block_format.indent.unwrap_or(0) as f32;
@@ -123,7 +165,7 @@ pub fn convert_block(block: &BlockSnapshot) -> BlockLayoutParams {
             .and_then(|s| parse_css_color(s))
             .or_else(|| {
                 if block.block_format.is_code_block == Some(true) {
-                    Some([0.95, 0.95, 0.95, 1.0])
+                    Some(opts.code_block_background)
                 } else {
                     None
                 }
@@ -131,7 +173,11 @@ pub fn convert_block(block: &BlockSnapshot) -> BlockLayoutParams {
     }
 }
 
-fn convert_fragment(frag: &FragmentContent, heading_scale: f32) -> FragmentParams {
+fn convert_fragment(
+    frag: &FragmentContent,
+    heading_scale: f32,
+    opts: &BridgeOptions,
+) -> FragmentParams {
     match frag {
         FragmentContent::Text {
             text,
@@ -139,36 +185,58 @@ fn convert_fragment(frag: &FragmentContent, heading_scale: f32) -> FragmentParam
             offset,
             length,
             ..
-        } => FragmentParams {
-            text: text.clone(),
-            offset: *offset,
-            length: *length,
-            font_family: format.font_family.clone(),
-            font_weight: format.font_weight,
-            font_bold: format.font_bold,
-            font_italic: format.font_italic,
-            font_point_size: if heading_scale != 1.0 {
-                // Apply heading scale; use 16 as default if no explicit size
-                Some((format.font_point_size.unwrap_or(16) as f32 * heading_scale) as u32)
-            } else {
-                format.font_point_size
-            },
-            underline_style: convert_underline_style(format),
-            overline: format.font_overline.unwrap_or(false),
-            strikeout: format.font_strikeout.unwrap_or(false),
-            is_link: format.is_anchor.unwrap_or(false),
-            letter_spacing: format.letter_spacing.unwrap_or(0) as f32,
-            word_spacing: format.word_spacing.unwrap_or(0) as f32,
-            foreground_color: format.foreground_color.as_ref().map(convert_color),
-            underline_color: format.underline_color.as_ref().map(convert_color),
-            background_color: format.background_color.as_ref().map(convert_color),
-            anchor_href: format.anchor_href.clone(),
-            tooltip: format.tooltip.clone(),
-            vertical_alignment: convert_vertical_alignment(format),
-            image_name: None,
-            image_width: 0.0,
-            image_height: 0.0,
-        },
+        } => {
+            // Monospaced runs without an explicit foreground pick up the
+            // host theme's code_block_foreground so `inline code` and
+            // fenced code blocks read as their own register against
+            // prose. Authors that pinned a colour explicitly always win.
+            let is_monospace = format
+                .font_family
+                .as_deref()
+                .map(|f| f.eq_ignore_ascii_case("monospace"))
+                .unwrap_or(false);
+            let foreground_color = format
+                .foreground_color
+                .as_ref()
+                .map(convert_color)
+                .or_else(|| {
+                    if is_monospace {
+                        opts.code_block_foreground
+                    } else {
+                        None
+                    }
+                });
+            FragmentParams {
+                text: text.clone(),
+                offset: *offset,
+                length: *length,
+                font_family: format.font_family.clone(),
+                font_weight: format.font_weight,
+                font_bold: format.font_bold,
+                font_italic: format.font_italic,
+                font_point_size: if heading_scale != 1.0 {
+                    // Apply heading scale; use 16 as default if no explicit size
+                    Some((format.font_point_size.unwrap_or(16) as f32 * heading_scale) as u32)
+                } else {
+                    format.font_point_size
+                },
+                underline_style: convert_underline_style(format),
+                overline: format.font_overline.unwrap_or(false),
+                strikeout: format.font_strikeout.unwrap_or(false),
+                is_link: format.is_anchor.unwrap_or(false),
+                letter_spacing: format.letter_spacing.unwrap_or(0) as f32,
+                word_spacing: format.word_spacing.unwrap_or(0) as f32,
+                foreground_color,
+                underline_color: format.underline_color.as_ref().map(convert_color),
+                background_color: format.background_color.as_ref().map(convert_color),
+                anchor_href: format.anchor_href.clone(),
+                tooltip: format.tooltip.clone(),
+                vertical_alignment: convert_vertical_alignment(format),
+                image_name: None,
+                image_width: 0.0,
+                image_height: 0.0,
+            }
+        }
         FragmentContent::Image {
             name,
             width,
@@ -356,9 +424,17 @@ fn convert_alignment(a: &text_document::Alignment) -> Alignment {
 }
 
 pub fn convert_table(table: &TableSnapshot) -> TableLayoutParams {
+    convert_table_with(table, &BridgeOptions::default())
+}
+
+pub fn convert_table_with(table: &TableSnapshot, opts: &BridgeOptions) -> TableLayoutParams {
     let column_widths: Vec<f32> = table.column_widths.iter().map(|&w| w as f32).collect();
 
-    let cells: Vec<CellLayoutParams> = table.cells.iter().map(convert_cell).collect();
+    let cells: Vec<CellLayoutParams> = table
+        .cells
+        .iter()
+        .map(|c| convert_cell(c, opts))
+        .collect();
 
     TableLayoutParams {
         table_id: table.table_id,
@@ -372,8 +448,12 @@ pub fn convert_table(table: &TableSnapshot) -> TableLayoutParams {
     }
 }
 
-fn convert_cell(cell: &CellSnapshot) -> CellLayoutParams {
-    let blocks: Vec<BlockLayoutParams> = cell.blocks.iter().map(convert_block).collect();
+fn convert_cell(cell: &CellSnapshot, opts: &BridgeOptions) -> CellLayoutParams {
+    let blocks: Vec<BlockLayoutParams> = cell
+        .blocks
+        .iter()
+        .map(|b| convert_block_with(b, opts))
+        .collect();
 
     let background_color = cell
         .format
@@ -390,6 +470,10 @@ fn convert_cell(cell: &CellSnapshot) -> CellLayoutParams {
 }
 
 pub fn convert_frame(frame: &FrameSnapshot) -> FrameLayoutParams {
+    convert_frame_with(frame, &BridgeOptions::default())
+}
+
+pub fn convert_frame_with(frame: &FrameSnapshot, opts: &BridgeOptions) -> FrameLayoutParams {
     let mut blocks = Vec::new();
     let mut tables = Vec::new();
     let mut frames = Vec::new();
@@ -397,13 +481,13 @@ pub fn convert_frame(frame: &FrameSnapshot) -> FrameLayoutParams {
     for (i, element) in frame.elements.iter().enumerate() {
         match element {
             FlowElementSnapshot::Block(block) => {
-                blocks.push(convert_block(block));
+                blocks.push(convert_block_with(block, opts));
             }
             FlowElementSnapshot::Table(table) => {
-                tables.push((i, convert_table(table)));
+                tables.push((i, convert_table_with(table, opts)));
             }
             FlowElementSnapshot::Frame(inner_frame) => {
-                frames.push((i, convert_frame(inner_frame)));
+                frames.push((i, convert_frame_with(inner_frame, opts)));
             }
         }
     }

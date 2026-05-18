@@ -134,6 +134,17 @@ pub struct DocumentFlow {
     selection_color: [f32; 4],
     cursor_color: [f32; 4],
     text_color: [f32; 4],
+    /// Background used by the text-document bridge when a code block
+    /// carries no explicit `background_color`. Overrides the bridge's
+    /// historical light-grey default. Threaded into every
+    /// `convert_flow_with` / `convert_block_with` call kicked off
+    /// from `layout_full`. See [`set_code_block_background`].
+    code_block_background: [f32; 4],
+    /// Foreground used by the text-document bridge for monospaced runs
+    /// (markdown inline `code`, fenced code blocks) that carry no
+    /// explicit `foreground_color`. `None` keeps the engine's default
+    /// `text_color`. See [`set_code_block_foreground`].
+    code_block_foreground: Option<[f32; 4]>,
     cursors: Vec<CursorDisplay>,
     zoom: f32,
     rendered_zoom: f32,
@@ -165,6 +176,8 @@ impl DocumentFlow {
             selection_color: [0.26, 0.52, 0.96, 0.3],
             cursor_color: [0.0, 0.0, 0.0, 1.0],
             text_color: [0.0, 0.0, 0.0, 1.0],
+            code_block_background: [0.95, 0.95, 0.95, 1.0],
+            code_block_foreground: None,
             cursors: Vec::new(),
             zoom: 1.0,
             rendered_zoom: f32::NAN,
@@ -320,9 +333,13 @@ impl DocumentFlow {
     /// edits prefer [`relayout_block`](Self::relayout_block).
     #[cfg(feature = "text-document")]
     pub fn layout_full(&mut self, service: &TextFontService, flow: &text_document::FlowSnapshot) {
-        use crate::bridge::convert_flow;
+        use crate::bridge::{BridgeOptions, convert_flow_with};
 
-        let converted = convert_flow(flow);
+        let opts = BridgeOptions {
+            code_block_background: self.code_block_background,
+            code_block_foreground: self.code_block_foreground,
+        };
+        let converted = convert_flow_with(flow, &opts);
 
         // Merge all elements by flow index and process in order.
         let mut all_items: Vec<(usize, FlowItemKind)> = Vec::new();
@@ -1420,6 +1437,34 @@ impl DocumentFlow {
     /// Current default text color.
     pub fn text_color(&self) -> [f32; 4] {
         self.text_color
+    }
+
+    /// Set the background painted behind fenced code blocks when the
+    /// block carries no explicit `background_color`. Hosts wire this
+    /// from the active theme so dark / light swaps reach the cards.
+    /// Default `[0.95, 0.95, 0.95, 1.0]` (light grey). Affects future
+    /// `layout_full` / `relayout_block` calls; existing layouts keep
+    /// their already-converted background until they next re-shape.
+    pub fn set_code_block_background(&mut self, color: [f32; 4]) {
+        self.code_block_background = color;
+    }
+
+    /// Current code-block background default.
+    pub fn code_block_background(&self) -> [f32; 4] {
+        self.code_block_background
+    }
+
+    /// Set the foreground used for monospaced runs (inline `code`,
+    /// fenced code blocks) that carry no explicit `foreground_color`.
+    /// `None` (default) keeps the engine's `text_color`. Hosts wire
+    /// this from the active theme alongside `set_code_block_background`.
+    pub fn set_code_block_foreground(&mut self, color: Option<[f32; 4]>) {
+        self.code_block_foreground = color;
+    }
+
+    /// Current code-block foreground override.
+    pub fn code_block_foreground(&self) -> Option<[f32; 4]> {
+        self.code_block_foreground
     }
 
     // ── Scrolling helpers ──────────────────────────────────────
