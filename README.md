@@ -163,9 +163,4 @@ The service cannot reach into per-widget flows, so it cannot clear their layouts
 
 ## License
 
-Licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+Licensed under the Mozilla Public License, Version 2.0 ([LICENSE](LICENSE)).
