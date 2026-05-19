@@ -155,11 +155,46 @@ pub enum VerticalAlignment {
 
 // ── Hit testing ─────────────────────────────────────────────────
 
+/// Disambiguates the two visual placements a single character position
+/// can have at a soft-wrap boundary. A long paragraph that wraps across
+/// lines K and K+1 has one character position N that sits at both the
+/// END of line K and the START of line K+1; affinity picks which one
+/// the caret renders at and which line `Home`/`End`-style navigation
+/// considers "current".
+///
+/// Affinity is a display concern: it makes no sense without a layout
+/// engine and a wrap width. It is never persisted with the text model
+/// (cf. Cocoa `NSSelectionAffinity` on `NSTextView`, not on
+/// `NSTextStorage`; Chromium `PositionWithAffinity` at the editing
+/// layer, not on `Position`; same in Qt and CodeMirror).
+///
+/// At positions that are NOT wrap boundaries — the interior of a line,
+/// the start of the first wrap-line, the end of the last wrap-line of
+/// a paragraph — affinity is a no-op and the rendering is identical.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum CursorAffinity {
+    /// Place the caret at the END of the previous wrap line. This is
+    /// the visual "trailing" placement and the default for any
+    /// position not produced by an upstream-side interaction.
+    #[default]
+    Downstream,
+    /// Place the caret at the START of the next wrap line.
+    Upstream,
+}
+
 /// Result of [`crate::Typesetter::hit_test`] - maps a screen-space point to a
 /// document position.
 pub struct HitTestResult {
     /// Absolute character position in the document.
     pub position: usize,
+    /// Which side of a soft-wrap boundary the click landed on. When
+    /// the matched line's Y range contained the click and `position`
+    /// equals that line's `char_range.start` AND a preceding line in
+    /// the same block ends at the same position, the click is on the
+    /// upstream side of the boundary → `Upstream`. Otherwise
+    /// `Downstream`. At non-wrap positions the value is `Downstream`
+    /// (default) and does not affect anything.
+    pub affinity: CursorAffinity,
     /// Which block (paragraph) was hit, identified by stable block ID.
     pub block_id: usize,
     /// Character offset within the block (0 = start of block).
@@ -210,6 +245,11 @@ pub struct CursorDisplay {
     /// When different from `position`, the range `[min(anchor, position), max(anchor, position))`
     /// is highlighted as a selection.
     pub anchor: usize,
+    /// Which side of a soft-wrap boundary the caret renders on (see
+    /// [`CursorAffinity`]). At non-boundary positions this is a
+    /// no-op; default `Downstream` (current behavior before affinity
+    /// was introduced).
+    pub affinity: CursorAffinity,
     /// Whether the caret is visible (false during the blink-off phase).
     /// The adapter manages the blink timer; text-typeset just respects this flag.
     pub visible: bool,

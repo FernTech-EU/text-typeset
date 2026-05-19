@@ -923,6 +923,7 @@ fn selection_within_single_table_cell() {
     ts.set_cursor(&CursorDisplay {
         position: 4,
         anchor: 0,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -955,6 +956,7 @@ fn selection_across_table_cells() {
     ts.set_cursor(&CursorDisplay {
         position: 22,
         anchor: 0,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -986,6 +988,7 @@ fn cursor_visible_in_table_cell() {
     ts.set_cursor(&CursorDisplay {
         position: 18,
         anchor: 18,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });

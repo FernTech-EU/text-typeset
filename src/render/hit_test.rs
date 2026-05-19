@@ -1,5 +1,5 @@
 use crate::layout::flow::{FlowItem, FlowLayout};
-use crate::types::{HitRegion, HitTestResult};
+use crate::types::{CursorAffinity, HitRegion, HitTestResult};
 
 /// Map a screen-space point to a document position.
 ///
@@ -24,13 +24,22 @@ pub fn hit_test(flow: &FlowLayout, scroll_offset: f32, x: f32, y: f32) -> Option
     hit_test_block(block_id, block, doc_y, x, 0.0, 0.0)
 }
 
-/// Get the screen-space caret rectangle at a document position.
-pub fn caret_rect(flow: &FlowLayout, scroll_offset: f32, position: usize) -> [f32; 4] {
+/// Get the screen-space caret rectangle at a document position with
+/// the given affinity. At soft-wrap boundaries the same position has
+/// two visual placements; `affinity` picks between them. At every
+/// other position affinity is irrelevant and the result is identical
+/// to `CursorAffinity::Downstream`.
+pub fn caret_rect(
+    flow: &FlowLayout,
+    scroll_offset: f32,
+    position: usize,
+    affinity: CursorAffinity,
+) -> [f32; 4] {
     // Search frames first (matching hit_test priority so that after incremental
     // relayout of a frame block, overlapping stale positions in subsequent
     // top-level blocks don't steal the caret).
     for frame in flow.frames.values() {
-        if let Some(rect) = caret_rect_in_frame(frame, position, scroll_offset, 0.0, 0.0) {
+        if let Some(rect) = caret_rect_in_frame(frame, position, affinity, scroll_offset, 0.0, 0.0) {
             return rect;
         }
     }
@@ -46,7 +55,7 @@ pub fn caret_rect(flow: &FlowLayout, scroll_offset: f32, position: usize) -> [f3
             let offset_y = table.y + table.row_ys[cell.row];
             for block in &cell.blocks {
                 if let Some(rect) =
-                    caret_rect_in_block(block, position, scroll_offset, offset_x, offset_y)
+                    caret_rect_in_block(block, position, affinity, scroll_offset, offset_x, offset_y)
                 {
                     return rect;
                 }
@@ -65,7 +74,7 @@ pub fn caret_rect(flow: &FlowLayout, scroll_offset: f32, position: usize) -> [f3
             None => continue,
         };
 
-        if let Some(rect) = caret_rect_in_block(block, position, scroll_offset, 0.0, 0.0) {
+        if let Some(rect) = caret_rect_in_block(block, position, affinity, scroll_offset, 0.0, 0.0) {
             return rect;
         }
     }
@@ -91,22 +100,19 @@ fn hit_test_block(
     let content_top = offset_y + block.y;
     let local_x = x - offset_x;
 
-    // Check if x is in the left margin
-    if local_x < block.left_margin {
-        return Some(HitTestResult {
-            position: block.position,
-            block_id,
-            offset_in_block: 0,
-            region: HitRegion::LeftMargin,
-            tooltip: None,
-            table_id: None,
-        });
-    }
-
-    // Find which line within the block
+    // Find which line within the block FIRST. We need the matched
+    // line (and its char_range.start) before deciding what the
+    // left-margin shortcut returns — for wrapped blocks, the start
+    // of line K (K > 0) is NOT the block's start, and Home pressed
+    // from line K should go to LINE K's start, not the block start.
+    // (Pre-affinity, the shortcut returned `block.position` here,
+    // which silently broke `move_cursor_to_line_edge` for any line
+    // past the first wrap line — the bug went unnoticed because
+    // Downstream-default caret_rect always picked line 1's rect at
+    // a wrap boundary, so the Home probe always landed on line 1.)
     let local_y = doc_y - content_top;
-    let line = match find_line_at_y(&block.lines, local_y) {
-        Some(l) => l,
+    let (line_idx, line) = match find_line_index_at_y(&block.lines, local_y) {
+        Some((i, l)) => (i, l),
         None => {
             // Above all lines: return start of first line
             if let Some(first_line) = block.lines.first()
@@ -114,6 +120,7 @@ fn hit_test_block(
             {
                 return Some(HitTestResult {
                     position: block.position + first_line.char_range.start,
+                    affinity: CursorAffinity::Downstream,
                     block_id,
                     offset_in_block: first_line.char_range.start,
                     region: HitRegion::BelowContent,
@@ -125,6 +132,7 @@ fn hit_test_block(
             if let Some(last_line) = block.lines.last() {
                 return Some(HitTestResult {
                     position: block.position + last_line.char_range.end,
+                    affinity: CursorAffinity::Downstream,
                     block_id,
                     offset_in_block: last_line.char_range.end,
                     region: HitRegion::BelowContent,
@@ -134,6 +142,7 @@ fn hit_test_block(
             }
             return Some(HitTestResult {
                 position: block.position,
+                affinity: CursorAffinity::Downstream,
                 block_id,
                 offset_in_block: 0,
                 region: HitRegion::BelowContent,
@@ -143,12 +152,62 @@ fn hit_test_block(
         }
     };
 
+    // Left margin shortcut: if local_x is to the LEFT of the block's
+    // text content area, return the start of the matched line. For
+    // wrapped blocks line K (K > 0) starts at its own
+    // `char_range.start`, not at the block's `position`. Compute
+    // affinity normally so a left-margin click on line K+1 still
+    // gets Upstream when line K ends at the same position.
+    if local_x < block.left_margin {
+        let offset_in_block = line.char_range.start;
+        let affinity = if line_idx > 0
+            && block
+                .lines
+                .get(line_idx - 1)
+                .is_some_and(|prev| prev.char_range.end == offset_in_block)
+        {
+            CursorAffinity::Upstream
+        } else {
+            CursorAffinity::Downstream
+        };
+        return Some(HitTestResult {
+            position: block.position + offset_in_block,
+            affinity,
+            block_id,
+            offset_in_block,
+            region: HitRegion::LeftMargin,
+            tooltip: None,
+            table_id: None,
+        });
+    }
+
     // Find which glyph within the line
     let glyph_x = local_x - block.left_margin;
     let (offset_in_block, region, tooltip) = find_position_in_line(line, glyph_x);
 
+    // Affinity rule at soft-wrap boundaries: when the click landed in
+    // line K+1's Y range AND the resolved offset equals K+1's
+    // char_range.start AND the previous line K ends at the same offset
+    // (i.e. K and K+1 share a wrap boundary), the click is on the
+    // upstream side and the caret must render at the START of line
+    // K+1, not at the END of line K. Otherwise the default Downstream
+    // applies (everything else, including end-of-line clicks and
+    // non-wrap positions).
+    let affinity = if offset_in_block == line.char_range.start
+        && line_idx > 0
+        && block
+            .lines
+            .get(line_idx - 1)
+            .is_some_and(|prev| prev.char_range.end == offset_in_block)
+    {
+        CursorAffinity::Upstream
+    } else {
+        CursorAffinity::Downstream
+    };
+
     Some(HitTestResult {
         position: block.position + offset_in_block,
+        affinity,
         block_id,
         offset_in_block,
         region,
@@ -418,6 +477,7 @@ fn find_table_column(table: &crate::layout::table::TableLayout, local_x: f32) ->
 fn caret_rect_in_frame(
     frame: &crate::layout::frame::FrameLayout,
     position: usize,
+    affinity: CursorAffinity,
     scroll_offset: f32,
     base_x: f32,
     base_y: f32,
@@ -434,7 +494,7 @@ fn caret_rect_in_frame(
             let offset_y = fy + table.y + table.row_ys[cell.row];
             for block in &cell.blocks {
                 if let Some(rect) =
-                    caret_rect_in_block(block, position, scroll_offset, offset_x, offset_y)
+                    caret_rect_in_block(block, position, affinity, scroll_offset, offset_x, offset_y)
                 {
                     return Some(rect);
                 }
@@ -442,12 +502,12 @@ fn caret_rect_in_frame(
         }
     }
     for block in &frame.blocks {
-        if let Some(rect) = caret_rect_in_block(block, position, scroll_offset, fx, fy) {
+        if let Some(rect) = caret_rect_in_block(block, position, affinity, scroll_offset, fx, fy) {
             return Some(rect);
         }
     }
     for nested in &frame.frames {
-        if let Some(rect) = caret_rect_in_frame(nested, position, scroll_offset, fx, fy) {
+        if let Some(rect) = caret_rect_in_frame(nested, position, affinity, scroll_offset, fx, fy) {
             return Some(rect);
         }
     }
@@ -456,9 +516,17 @@ fn caret_rect_in_frame(
 
 /// Compute the caret rect for a position within a single block.
 /// Returns None if the position is not within this block.
+///
+/// Affinity selection: at a soft-wrap boundary the position equals
+/// both line K's `char_range.end` and line K+1's `char_range.start`.
+/// The default Downstream picks line K (the earlier match — current
+/// pre-affinity behavior). Upstream picks line K+1 (the later match).
+/// At every non-boundary position there is only one matching line and
+/// affinity is irrelevant.
 fn caret_rect_in_block(
     block: &BlockLayout,
     position: usize,
+    affinity: CursorAffinity,
     scroll_offset: f32,
     offset_x: f32,
     offset_y: f32,
@@ -471,6 +539,10 @@ fn caret_rect_in_block(
 
     let offset_in_block = position - block.position;
 
+    // Find every line whose char_range contains offset_in_block. At a
+    // wrap boundary two consecutive lines match; pick the LAST when
+    // affinity is Upstream, the FIRST otherwise.
+    let mut matched: Option<&LayoutLine> = None;
     for line in &block.lines {
         if offset_in_block < line.char_range.start {
             continue;
@@ -478,15 +550,23 @@ fn caret_rect_in_block(
         if offset_in_block > line.char_range.end {
             continue;
         }
-
-        let caret_x = line.x_for_offset(offset_in_block) + block.left_margin + offset_x;
-        let caret_y = offset_y + block.y + line.y - line.ascent - scroll_offset;
-        let caret_height = line.line_height;
-
-        return Some([caret_x, caret_y, 2.0, caret_height]);
+        match affinity {
+            CursorAffinity::Downstream => {
+                matched = Some(line);
+                break;
+            }
+            CursorAffinity::Upstream => {
+                // Keep walking — last match wins.
+                matched = Some(line);
+            }
+        }
     }
 
-    None
+    let line = matched?;
+    let caret_x = line.x_for_offset(offset_in_block) + block.left_margin + offset_x;
+    let caret_y = offset_y + block.y + line.y - line.ascent - scroll_offset;
+    let caret_height = line.line_height;
+    Some([caret_x, caret_y, 2.0, caret_height])
 }
 
 fn find_block_at_y(flow: &FlowLayout, doc_y: f32) -> Option<(usize, &BlockLayout)> {
@@ -560,13 +640,17 @@ fn find_block_at_y(flow: &FlowLayout, doc_y: f32) -> Option<(usize, &BlockLayout
     None
 }
 
-fn find_line_at_y(lines: &[LayoutLine], local_y: f32) -> Option<&LayoutLine> {
+/// Find the line at the given local-y, returning its index in `lines`
+/// alongside the line reference. The index lets the caller inspect
+/// the previous line (line K-1) to detect soft-wrap boundaries and
+/// compute the click's [`CursorAffinity`].
+fn find_line_index_at_y(lines: &[LayoutLine], local_y: f32) -> Option<(usize, &LayoutLine)> {
     // line.y is the baseline; the line occupies from (y - ascent) to (y - ascent + line_height)
-    for line in lines {
+    for (i, line) in lines.iter().enumerate() {
         let line_top = line.y - line.ascent;
         let line_bottom = line_top + line.line_height;
         if local_y >= line_top && local_y < line_bottom {
-            return Some(line);
+            return Some((i, line));
         }
     }
     None

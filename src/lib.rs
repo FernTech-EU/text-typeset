@@ -92,9 +92,10 @@ mod font_service;
 // Public API
 pub use layout::inline_markup::{InlineAttrs, InlineMarkup, InlineSpan};
 pub use types::{
-    BlockVisualInfo, CharacterGeometry, CursorDisplay, DecorationKind, DecorationRect, FontFaceId,
-    GlyphQuad, HitRegion, HitTestResult, ImageQuad, LaidOutSpan, LaidOutSpanKind, ParagraphResult,
-    RenderFrame, SingleLineResult, TextFormat, UnderlineStyle, VerticalAlignment,
+    BlockVisualInfo, CharacterGeometry, CursorAffinity, CursorDisplay, DecorationKind,
+    DecorationRect, FontFaceId, GlyphQuad, HitRegion, HitTestResult, ImageQuad, LaidOutSpan,
+    LaidOutSpanKind, ParagraphResult, RenderFrame, SingleLineResult, TextFormat, UnderlineStyle,
+    VerticalAlignment,
 };
 
 pub use document_flow::{ContentWidthMode, DocumentFlow, RelayoutError};

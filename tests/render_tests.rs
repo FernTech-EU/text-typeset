@@ -2534,6 +2534,7 @@ fn zoom_render_cursor_only_scales_cursor() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 2,
         anchor: 2,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -2543,6 +2544,7 @@ fn zoom_render_cursor_only_scales_cursor() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 3,
         anchor: 3,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });

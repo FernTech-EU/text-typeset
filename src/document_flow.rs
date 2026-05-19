@@ -1375,14 +1375,22 @@ impl DocumentFlow {
         out
     }
 
-    /// Screen-space caret rectangle at a document position, as
-    /// `[x, y, width, height]`. Feed this to the platform IME for
-    /// composition window placement. For drawing the caret itself,
-    /// use the `DecorationKind::Cursor` entry in
+    /// Screen-space caret rectangle at a document position with the
+    /// given affinity, as `[x, y, width, height]`. Feed this to the
+    /// platform IME for composition window placement. For drawing the
+    /// caret itself, use the `DecorationKind::Cursor` entry in
     /// [`RenderFrame::decorations`] instead.
-    pub fn caret_rect(&self, position: usize) -> [f32; 4] {
-        let mut rect =
-            crate::render::hit_test::caret_rect(&self.flow_layout, self.scroll_offset, position);
+    ///
+    /// Affinity only changes the result at soft-wrap boundaries; at
+    /// every other position the two affinities return the same rect.
+    /// `CursorAffinity::Downstream` matches the pre-affinity behavior.
+    pub fn caret_rect(&self, position: usize, affinity: crate::types::CursorAffinity) -> [f32; 4] {
+        let mut rect = crate::render::hit_test::caret_rect(
+            &self.flow_layout,
+            self.scroll_offset,
+            position,
+            affinity,
+        );
         rect[0] *= self.zoom;
         rect[1] *= self.zoom;
         rect[2] *= self.zoom;
@@ -1397,6 +1405,7 @@ impl DocumentFlow {
         self.cursors = vec![CursorDisplay {
             position: cursor.position,
             anchor: cursor.anchor,
+            affinity: cursor.affinity,
             visible: cursor.visible,
             selected_cells: cursor.selected_cells.clone(),
         }];
@@ -1411,6 +1420,7 @@ impl DocumentFlow {
             .map(|c| CursorDisplay {
                 position: c.position,
                 anchor: c.anchor,
+                affinity: c.affinity,
                 visible: c.visible,
                 selected_cells: c.selected_cells.clone(),
             })
@@ -1492,9 +1502,15 @@ impl DocumentFlow {
 
     /// Scroll so that `position` is visible, placing it roughly one
     /// third from the top of the viewport. Returns the new offset.
+    /// Affinity defaults to `Downstream` since scroll targeting picks
+    /// any acceptable line for the position.
     pub fn scroll_to_position(&mut self, position: usize) -> f32 {
-        let rect =
-            crate::render::hit_test::caret_rect(&self.flow_layout, self.scroll_offset, position);
+        let rect = crate::render::hit_test::caret_rect(
+            &self.flow_layout,
+            self.scroll_offset,
+            position,
+            crate::types::CursorAffinity::Downstream,
+        );
         let target_y = rect[1] + self.scroll_offset - self.viewport_height / (3.0 * self.zoom);
         self.scroll_offset = target_y.max(0.0);
         self.scroll_offset
@@ -1508,7 +1524,13 @@ impl DocumentFlow {
             return None;
         }
         let pos = self.cursors[0].position;
-        let rect = crate::render::hit_test::caret_rect(&self.flow_layout, self.scroll_offset, pos);
+        let affinity = self.cursors[0].affinity;
+        let rect = crate::render::hit_test::caret_rect(
+            &self.flow_layout,
+            self.scroll_offset,
+            pos,
+            affinity,
+        );
         let caret_screen_y = rect[1];
         let caret_screen_bottom = caret_screen_y + rect[3];
         let effective_vh = self.viewport_height / self.zoom;

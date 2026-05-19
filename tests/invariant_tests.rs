@@ -189,6 +189,7 @@ proptest! {
         ts.set_cursor(&CursorDisplay {
             position: clamped,
             anchor: clamped,
+            affinity: text_typeset::CursorAffinity::Downstream,
             visible: true,
             selected_cells: vec![],
         });

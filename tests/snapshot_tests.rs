@@ -94,6 +94,7 @@ fn snapshot_selection_decoration_kinds() {
     ts.set_cursor(&CursorDisplay {
         position: 6,
         anchor: 30,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -113,6 +114,7 @@ fn snapshot_cursor_only_emits_one_cursor_decoration() {
     ts.set_cursor(&CursorDisplay {
         position: 2,
         anchor: 2,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });

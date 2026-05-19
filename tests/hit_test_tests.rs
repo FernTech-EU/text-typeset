@@ -196,6 +196,7 @@ fn cursor_produces_caret_decoration() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 5,
         anchor: 5,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -218,6 +219,7 @@ fn invisible_cursor_produces_no_caret() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 3,
         anchor: 3,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: false, // blink off
         selected_cells: vec![],
     });
@@ -241,6 +243,7 @@ fn selection_produces_highlight_rects() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 0,
         anchor: 5, // select "Hello"
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -269,6 +272,7 @@ fn no_selection_when_anchor_equals_position() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 3,
         anchor: 3, // no selection
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -296,6 +300,7 @@ fn multi_line_selection_extends_to_viewport_width() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 0,
         anchor: 24, // past both blocks
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -332,6 +337,7 @@ fn single_line_selection_does_not_extend() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 6,
         anchor: 11,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -362,12 +368,14 @@ fn multiple_cursors() {
         text_typeset::CursorDisplay {
             position: 2,
             anchor: 2,
+            affinity: text_typeset::CursorAffinity::Downstream,
             visible: true,
             selected_cells: vec![],
         },
         text_typeset::CursorDisplay {
             position: 7,
             anchor: 7,
+            affinity: text_typeset::CursorAffinity::Downstream,
             visible: true,
             selected_cells: vec![],
         },
@@ -418,6 +426,7 @@ fn ensure_caret_visible_when_already_visible() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 0,
         anchor: 0,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -451,6 +460,7 @@ fn ensure_caret_visible_scrolls_down_when_needed() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 300, // deep in the document
         anchor: 300,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -676,6 +686,7 @@ fn selection_highlights_text_inside_table_cell() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 8,
         anchor: 3,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -726,6 +737,7 @@ fn selection_highlights_text_inside_frame() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 8,
         anchor: 3,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -1364,6 +1376,7 @@ fn selection_inside_nested_frame() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 9,
         anchor: 14,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });

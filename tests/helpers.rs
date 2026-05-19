@@ -441,8 +441,24 @@ impl Typesetter {
     ) -> Vec<CharacterGeometry> {
         self.flow.character_geometry(block_id, char_start, char_end)
     }
+    /// Caret rect at `position` with the default `Downstream`
+    /// affinity. Existing tests use this; new affinity-aware tests
+    /// use [`Self::caret_rect_with_affinity`].
     pub fn caret_rect(&self, position: usize) -> [f32; 4] {
-        self.flow.caret_rect(position)
+        self.flow
+            .caret_rect(position, text_typeset::CursorAffinity::Downstream)
+    }
+
+    /// Caret rect at `position` with a specific affinity. At soft-wrap
+    /// boundaries the two affinities return different rects (one per
+    /// display line); at every other position the result is the same
+    /// as `caret_rect(position)`.
+    pub fn caret_rect_with_affinity(
+        &self,
+        position: usize,
+        affinity: text_typeset::CursorAffinity,
+    ) -> [f32; 4] {
+        self.flow.caret_rect(position, affinity)
     }
 
     // ── Cursor & colors ──

@@ -125,6 +125,7 @@ fn cursor_and_selection_on_document() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 7,
         anchor: 11,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -429,6 +430,7 @@ fn selection_spanning_blockquote_boundary() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: 0,
         anchor: 10,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -477,6 +479,7 @@ fn ensure_caret_visible_inside_blockquote() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: deep_pos,
         anchor: deep_pos,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });
@@ -686,6 +689,7 @@ fn selection_spanning_nested_blockquote() {
     ts.set_cursor(&text_typeset::CursorDisplay {
         position: start,
         anchor: end,
+        affinity: text_typeset::CursorAffinity::Downstream,
         visible: true,
         selected_cells: vec![],
     });

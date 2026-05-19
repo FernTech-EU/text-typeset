@@ -49,9 +49,11 @@ pub fn generate_cursor_decorations(
             decorations.extend(sel_rects);
         }
 
-        // Cursor caret (if visible)
+        // Cursor caret (if visible). Affinity from the CursorDisplay
+        // is consulted at wrap boundaries to pick which display line
+        // hosts the caret.
         if cursor.visible {
-            let rect = caret_rect(flow, scroll_offset, cursor.position);
+            let rect = caret_rect(flow, scroll_offset, cursor.position, cursor.affinity);
             decorations.push(DecorationRect {
                 rect,
                 color: cursor_color,
