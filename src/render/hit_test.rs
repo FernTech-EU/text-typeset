@@ -39,7 +39,8 @@ pub fn caret_rect(
     // relayout of a frame block, overlapping stale positions in subsequent
     // top-level blocks don't steal the caret).
     for frame in flow.frames.values() {
-        if let Some(rect) = caret_rect_in_frame(frame, position, affinity, scroll_offset, 0.0, 0.0) {
+        if let Some(rect) = caret_rect_in_frame(frame, position, affinity, scroll_offset, 0.0, 0.0)
+        {
             return rect;
         }
     }
@@ -54,9 +55,14 @@ pub fn caret_rect(
             let offset_x = table.column_xs[cell.column];
             let offset_y = table.y + table.row_ys[cell.row];
             for block in &cell.blocks {
-                if let Some(rect) =
-                    caret_rect_in_block(block, position, affinity, scroll_offset, offset_x, offset_y)
-                {
+                if let Some(rect) = caret_rect_in_block(
+                    block,
+                    position,
+                    affinity,
+                    scroll_offset,
+                    offset_x,
+                    offset_y,
+                ) {
                     return rect;
                 }
             }
@@ -74,7 +80,8 @@ pub fn caret_rect(
             None => continue,
         };
 
-        if let Some(rect) = caret_rect_in_block(block, position, affinity, scroll_offset, 0.0, 0.0) {
+        if let Some(rect) = caret_rect_in_block(block, position, affinity, scroll_offset, 0.0, 0.0)
+        {
             return rect;
         }
     }
@@ -493,9 +500,14 @@ fn caret_rect_in_frame(
             let offset_x = fx + table.column_xs[cell.column];
             let offset_y = fy + table.y + table.row_ys[cell.row];
             for block in &cell.blocks {
-                if let Some(rect) =
-                    caret_rect_in_block(block, position, affinity, scroll_offset, offset_x, offset_y)
-                {
+                if let Some(rect) = caret_rect_in_block(
+                    block,
+                    position,
+                    affinity,
+                    scroll_offset,
+                    offset_x,
+                    offset_y,
+                ) {
                     return Some(rect);
                 }
             }
