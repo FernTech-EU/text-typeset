@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use crate::shaping::run::ShapedRun;
 
+#[derive(Clone)]
 pub struct LayoutLine {
     pub runs: Vec<PositionedRun>,
     /// Baseline y relative to block top (set by block layout).
@@ -49,6 +50,7 @@ impl LayoutLine {
     }
 }
 
+#[derive(Clone)]
 pub struct PositionedRun {
     pub shaped_run: ShapedRun,
     /// X offset from the left edge of the content area.

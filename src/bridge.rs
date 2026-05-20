@@ -8,7 +8,7 @@ use text_document::{
     TableSnapshot,
 };
 
-use crate::layout::block::{BlockLayoutParams, FragmentParams};
+use crate::layout::block::{BlockLayoutParams, FragmentParams, PaintSpan};
 use crate::layout::frame::{FrameLayoutParams, FramePosition};
 use crate::layout::paragraph::Alignment;
 use crate::layout::table::{CellLayoutParams, TableLayoutParams};
@@ -366,20 +366,101 @@ fn convert_vertical_alignment(
 
 fn convert_underline_style(format: &text_document::TextFormat) -> crate::types::UnderlineStyle {
     use crate::types::UnderlineStyle;
-    match format.underline_style {
-        Some(text_document::UnderlineStyle::SingleUnderline) => UnderlineStyle::Single,
-        Some(text_document::UnderlineStyle::DashUnderline) => UnderlineStyle::Dash,
-        Some(text_document::UnderlineStyle::DotLine) => UnderlineStyle::Dot,
-        Some(text_document::UnderlineStyle::DashDotLine) => UnderlineStyle::DashDot,
-        Some(text_document::UnderlineStyle::DashDotDotLine) => UnderlineStyle::DashDotDot,
-        Some(text_document::UnderlineStyle::WaveUnderline) => UnderlineStyle::Wave,
-        Some(text_document::UnderlineStyle::SpellCheckUnderline) => UnderlineStyle::SpellCheck,
-        Some(text_document::UnderlineStyle::NoUnderline) => UnderlineStyle::None,
+    match &format.underline_style {
+        Some(s) => convert_underline_style_value(s),
         None => {
             if format.font_underline.unwrap_or(false) {
                 UnderlineStyle::Single
             } else {
                 UnderlineStyle::None
+            }
+        }
+    }
+}
+
+/// Map a raw `text_document::UnderlineStyle` to the typesetter enum.
+fn convert_underline_style_value(s: &text_document::UnderlineStyle) -> crate::types::UnderlineStyle {
+    use crate::types::UnderlineStyle;
+    match s {
+        text_document::UnderlineStyle::SingleUnderline => UnderlineStyle::Single,
+        text_document::UnderlineStyle::DashUnderline => UnderlineStyle::Dash,
+        text_document::UnderlineStyle::DotLine => UnderlineStyle::Dot,
+        text_document::UnderlineStyle::DashDotLine => UnderlineStyle::DashDot,
+        text_document::UnderlineStyle::DashDotDotLine => UnderlineStyle::DashDotDot,
+        text_document::UnderlineStyle::WaveUnderline => UnderlineStyle::Wave,
+        text_document::UnderlineStyle::SpellCheckUnderline => UnderlineStyle::SpellCheck,
+        text_document::UnderlineStyle::NoUnderline => UnderlineStyle::None,
+    }
+}
+
+/// Convert a block snapshot's paint-only highlight overlay into the typesetter's
+/// [`PaintSpan`]s. Char offsets pass through unchanged (both sides are
+/// block-relative char offsets — the space post-layout glyph clusters live in).
+/// Underline is expressed through `underline_style`: an explicit
+/// `underline_style` wins, else `font_underline` maps to Single / None.
+pub fn convert_paint_spans(block: &BlockSnapshot) -> Vec<PaintSpan> {
+    block
+        .paint_highlights
+        .iter()
+        .map(|h| {
+            let underline_style = match &h.underline_style {
+                Some(s) => Some(convert_underline_style_value(s)),
+                None => match h.font_underline {
+                    Some(true) => Some(crate::types::UnderlineStyle::Single),
+                    Some(false) => Some(crate::types::UnderlineStyle::None),
+                    None => None,
+                },
+            };
+            PaintSpan {
+                char_start: h.start,
+                char_end: h.start + h.length,
+                foreground_color: h.foreground_color.as_ref().map(convert_color),
+                underline_color: h.underline_color.as_ref().map(convert_color),
+                background_color: h.background_color.as_ref().map(convert_color),
+                underline_style,
+                overline: h.font_overline,
+                strikeout: h.font_strikeout,
+            }
+        })
+        .collect()
+}
+
+/// Walk a whole [`FlowSnapshot`] (top-level blocks, table cells, and frames
+/// recursively) and collect the paint-only overlay for every block that has
+/// one, keyed by block_id. Blocks without paint highlights are omitted (the
+/// engine resets those to their base colors).
+pub fn collect_paint_spans(
+    flow: &FlowSnapshot,
+) -> std::collections::HashMap<usize, Vec<PaintSpan>> {
+    let mut out = std::collections::HashMap::new();
+    for el in &flow.elements {
+        collect_paint_spans_element(el, &mut out);
+    }
+    out
+}
+
+fn collect_paint_spans_element(
+    el: &FlowElementSnapshot,
+    out: &mut std::collections::HashMap<usize, Vec<PaintSpan>>,
+) {
+    match el {
+        FlowElementSnapshot::Block(b) => {
+            if !b.paint_highlights.is_empty() {
+                out.insert(b.block_id, convert_paint_spans(b));
+            }
+        }
+        FlowElementSnapshot::Table(t) => {
+            for c in &t.cells {
+                for b in &c.blocks {
+                    if !b.paint_highlights.is_empty() {
+                        out.insert(b.block_id, convert_paint_spans(b));
+                    }
+                }
+            }
+        }
+        FlowElementSnapshot::Frame(f) => {
+            for e in &f.elements {
+                collect_paint_spans_element(e, out);
             }
         }
     }

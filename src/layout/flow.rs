@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::font::registry::FontRegistry;
-use crate::layout::block::{BlockLayout, BlockLayoutParams, layout_block};
+use crate::layout::block::{BlockLayout, BlockLayoutParams, PaintSpan, apply_paint_spans, layout_block};
 use crate::layout::frame::{FrameLayout, FrameLayoutParams, layout_frame};
 use crate::layout::table::{TableLayout, TableLayoutParams, layout_table};
 
@@ -36,6 +36,16 @@ pub struct FlowLayout {
     /// Layout is always stored in logical pixels; this only affects
     /// precision (physical ppem) and glyph bitmap resolution.
     pub scale_factor: f32,
+    /// Un-overlaid (shaped) copy of every laid-out block, keyed by block_id.
+    /// The paint-overlay fast path re-derives the live blocks from these so
+    /// repeated highlight changes never compound run splits. Populated by a
+    /// full layout (`layout_blocks`) and refreshed per block on incremental
+    /// relayout.
+    base_blocks: HashMap<usize, BlockLayout>,
+    /// Current paint-only highlight overlay per block_id. Empty for a block
+    /// means "no overlay" (base colors). Kept so an incrementally relaid block
+    /// re-applies its overlay.
+    pending_paint_spans: HashMap<usize, Vec<PaintSpan>>,
 }
 
 impl Default for FlowLayout {
@@ -56,6 +66,8 @@ impl FlowLayout {
             viewport_height: 0.0,
             cached_max_content_width: 0.0,
             scale_factor: 1.0,
+            base_blocks: HashMap::new(),
+            pending_paint_spans: HashMap::new(),
         }
     }
 
@@ -150,6 +162,123 @@ impl FlowLayout {
         self.flow_order.clear();
         self.content_height = 0.0;
         self.cached_max_content_width = 0.0;
+        self.base_blocks.clear();
+        self.pending_paint_spans.clear();
+    }
+
+    /// Re-capture every laid-out block (top-level, table cells, frames,
+    /// recursively) as the paint-overlay base. Called after a full layout.
+    pub(crate) fn refresh_base_blocks(&mut self) {
+        self.base_blocks.clear();
+        let mut collected: Vec<(usize, BlockLayout)> = Vec::new();
+        for b in self.blocks.values() {
+            collected.push((b.block_id, b.clone()));
+        }
+        for t in self.tables.values() {
+            collect_table_base(t, &mut collected);
+        }
+        for f in self.frames.values() {
+            collect_frame_base(f, &mut collected);
+        }
+        for (id, b) in collected {
+            self.base_blocks.insert(id, b);
+        }
+    }
+
+    /// Replace the paint-only color overlay for the whole flow.
+    ///
+    /// `spans_by_block` maps block_id → its disjoint paint spans (from
+    /// `text_document`'s `extract_paint_spans`). Every block is re-derived from
+    /// its captured base, so colors/decorations change but glyph positions,
+    /// advances, line breaks, and heights do NOT — no reshape, no reflow.
+    /// Blocks absent from the map reset to base colors.
+    pub fn apply_paint_spans_for(&mut self, spans_by_block: HashMap<usize, Vec<PaintSpan>>) {
+        self.pending_paint_spans = spans_by_block;
+        let base = &self.base_blocks;
+        let pending = &self.pending_paint_spans;
+        for b in self.blocks.values_mut() {
+            overlay_block_in_place(b, base, pending);
+        }
+        for t in self.tables.values_mut() {
+            for c in &mut t.cell_layouts {
+                for b in &mut c.blocks {
+                    overlay_block_in_place(b, base, pending);
+                }
+            }
+        }
+        for f in self.frames.values_mut() {
+            overlay_frame_in_place(f, base, pending);
+        }
+    }
+
+    /// Apply (or clear, when `spans` is empty) the paint overlay for a single
+    /// block, re-derived from its base. Returns `false` if `block_id` has no
+    /// captured base.
+    pub fn apply_block_paint_spans(&mut self, block_id: usize, spans: &[PaintSpan]) -> bool {
+        if !self.base_blocks.contains_key(&block_id) {
+            return false;
+        }
+        if spans.is_empty() {
+            self.pending_paint_spans.remove(&block_id);
+        } else {
+            self.pending_paint_spans.insert(block_id, spans.to_vec());
+        }
+        let base = &self.base_blocks;
+        let pending = &self.pending_paint_spans;
+        if let Some(b) = self.blocks.get_mut(&block_id) {
+            overlay_block_in_place(b, base, pending);
+            return true;
+        }
+        for t in self.tables.values_mut() {
+            for c in &mut t.cell_layouts {
+                for b in &mut c.blocks {
+                    if b.block_id == block_id {
+                        overlay_block_in_place(b, base, pending);
+                        return true;
+                    }
+                }
+            }
+        }
+        for f in self.frames.values_mut() {
+            if overlay_one_in_frame(f, block_id, base, pending) {
+                return true;
+            }
+        }
+        true
+    }
+
+    /// After an incremental relayout of `block_id`, re-capture its (base-colored)
+    /// shaped output as the new base and re-apply its pending overlay in place.
+    /// No-op when no overlay is active.
+    fn refresh_base_and_overlay_block(&mut self, block_id: usize) {
+        if self.pending_paint_spans.is_empty() {
+            return;
+        }
+        let fresh = find_block_ref(self, block_id).cloned();
+        if let Some(b) = fresh {
+            self.base_blocks.insert(block_id, b);
+        }
+        let base = &self.base_blocks;
+        let pending = &self.pending_paint_spans;
+        if let Some(b) = self.blocks.get_mut(&block_id) {
+            overlay_block_in_place(b, base, pending);
+            return;
+        }
+        for t in self.tables.values_mut() {
+            for c in &mut t.cell_layouts {
+                for b in &mut c.blocks {
+                    if b.block_id == block_id {
+                        overlay_block_in_place(b, base, pending);
+                        return;
+                    }
+                }
+            }
+        }
+        for f in self.frames.values_mut() {
+            if overlay_one_in_frame(f, block_id, base, pending) {
+                return;
+            }
+        }
     }
 
     /// Add a single block to the flow at the current y position.
@@ -207,6 +336,11 @@ impl FlowLayout {
         for params in &block_params {
             self.add_block(registry, params, available_width);
         }
+        // Capture the freshly-shaped blocks as the paint-overlay base. A full
+        // layout clears any prior overlay (see `clear`), so the live blocks ARE
+        // the base at this point; the engine applies paint spans afterward via
+        // `apply_paint_spans_for`.
+        self.refresh_base_blocks();
     }
 
     /// Update a single block's layout and shift subsequent items if height changed.
@@ -224,6 +358,7 @@ impl FlowLayout {
         // Top-level block
         if self.blocks.contains_key(&block_id) {
             self.relayout_top_level_block(registry, params, available_width);
+            self.refresh_base_and_overlay_block(block_id);
             return;
         }
 
@@ -238,6 +373,7 @@ impl FlowLayout {
         });
         if let Some((table_id, row, col)) = table_match {
             self.relayout_table_block(registry, params, table_id, row, col);
+            self.refresh_base_and_overlay_block(block_id);
             return;
         }
 
@@ -250,6 +386,7 @@ impl FlowLayout {
         });
         if let Some(frame_id) = frame_match {
             self.relayout_frame_block(registry, params, frame_id);
+            self.refresh_base_and_overlay_block(block_id);
         }
     }
 
@@ -722,6 +859,140 @@ fn shift_block_positions_in_frame(frame: &mut FrameLayout, delta: isize) {
     for nested in &mut frame.frames {
         shift_block_positions_in_frame(nested, delta);
     }
+}
+
+// ── Paint-overlay helpers (recolor without reshape/reflow) ──────────────────
+
+/// Re-derive `b` in place from its base + pending overlay. No-op if no base
+/// was captured for it.
+fn overlay_block_in_place(
+    b: &mut BlockLayout,
+    base: &HashMap<usize, BlockLayout>,
+    pending: &HashMap<usize, Vec<PaintSpan>>,
+) {
+    if let Some(base_b) = base.get(&b.block_id) {
+        let empty: Vec<PaintSpan> = Vec::new();
+        let spans = pending.get(&b.block_id).unwrap_or(&empty);
+        *b = apply_paint_spans(base_b, spans);
+    }
+}
+
+/// Re-derive every block in a frame (recursively) from base + pending.
+fn overlay_frame_in_place(
+    frame: &mut FrameLayout,
+    base: &HashMap<usize, BlockLayout>,
+    pending: &HashMap<usize, Vec<PaintSpan>>,
+) {
+    for b in &mut frame.blocks {
+        overlay_block_in_place(b, base, pending);
+    }
+    for t in &mut frame.tables {
+        for c in &mut t.cell_layouts {
+            for b in &mut c.blocks {
+                overlay_block_in_place(b, base, pending);
+            }
+        }
+    }
+    for nested in &mut frame.frames {
+        overlay_frame_in_place(nested, base, pending);
+    }
+}
+
+/// Re-derive a single block (by id) inside a frame (recursively). Returns true
+/// if found.
+fn overlay_one_in_frame(
+    frame: &mut FrameLayout,
+    block_id: usize,
+    base: &HashMap<usize, BlockLayout>,
+    pending: &HashMap<usize, Vec<PaintSpan>>,
+) -> bool {
+    for b in &mut frame.blocks {
+        if b.block_id == block_id {
+            overlay_block_in_place(b, base, pending);
+            return true;
+        }
+    }
+    for t in &mut frame.tables {
+        for c in &mut t.cell_layouts {
+            for b in &mut c.blocks {
+                if b.block_id == block_id {
+                    overlay_block_in_place(b, base, pending);
+                    return true;
+                }
+            }
+        }
+    }
+    for nested in &mut frame.frames {
+        if overlay_one_in_frame(nested, block_id, base, pending) {
+            return true;
+        }
+    }
+    false
+}
+
+fn collect_table_base(t: &TableLayout, out: &mut Vec<(usize, BlockLayout)>) {
+    for c in &t.cell_layouts {
+        for b in &c.blocks {
+            out.push((b.block_id, b.clone()));
+        }
+    }
+}
+
+fn collect_frame_base(f: &FrameLayout, out: &mut Vec<(usize, BlockLayout)>) {
+    for b in &f.blocks {
+        out.push((b.block_id, b.clone()));
+    }
+    for t in &f.tables {
+        collect_table_base(t, out);
+    }
+    for nested in &f.frames {
+        collect_frame_base(nested, out);
+    }
+}
+
+/// Find a block by id across top-level / table cells / frames.
+fn find_block_ref(flow: &FlowLayout, block_id: usize) -> Option<&BlockLayout> {
+    if let Some(b) = flow.blocks.get(&block_id) {
+        return Some(b);
+    }
+    for t in flow.tables.values() {
+        for c in &t.cell_layouts {
+            for b in &c.blocks {
+                if b.block_id == block_id {
+                    return Some(b);
+                }
+            }
+        }
+    }
+    for f in flow.frames.values() {
+        if let Some(b) = find_block_in_frame(f, block_id) {
+            return Some(b);
+        }
+    }
+    None
+}
+
+fn find_block_in_frame(frame: &FrameLayout, block_id: usize) -> Option<&BlockLayout> {
+    for b in &frame.blocks {
+        if b.block_id == block_id {
+            return Some(b);
+        }
+    }
+    for t in &frame.tables {
+        for c in &t.cell_layouts {
+            for b in &c.blocks {
+                if b.block_id == block_id {
+                    return Some(b);
+                }
+            }
+        }
+    }
+    for nested in &frame.frames {
+        if let Some(b) = find_block_in_frame(nested, block_id) {
+            return Some(b);
+        }
+    }
+    None
 }
 
 /// Check whether a frame (or any of its nested frames) contains a block with the given id.
