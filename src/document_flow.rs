@@ -119,7 +119,7 @@ pub enum ContentWidthMode {
 
 /// Per-widget document flow state.
 ///
-/// See the [module docs](self) for the shape of the split and for
+/// See the module-level docs for the shape of the split and for
 /// lifecycle examples. Every layout/render method here takes a
 /// [`TextFontService`] reference so flows can share one atlas across
 /// an entire window.
@@ -138,18 +138,18 @@ pub struct DocumentFlow {
     /// carries no explicit `background_color`. Overrides the bridge's
     /// historical light-grey default. Threaded into every
     /// `convert_flow_with` / `convert_block_with` call kicked off
-    /// from `layout_full`. See [`set_code_block_background`].
+    /// from `layout_full`. See [`Self::set_code_block_background`].
     code_block_background: [f32; 4],
     /// Foreground used by the text-document bridge for monospaced runs
     /// (markdown inline `code`, fenced code blocks) that carry no
     /// explicit `foreground_color`. `None` keeps the engine's default
-    /// `text_color`. See [`set_code_block_foreground`].
+    /// `text_color`. See [`Self::set_code_block_foreground`].
     code_block_foreground: Option<[f32; 4]>,
     /// Echo / masking character for secure (password) fields. When
     /// `Some(c)`, every character laid out by `layout_full` is replaced
     /// with `c` before shaping, so the real text never reaches the
     /// shaper or the glyph atlas. `None` (default) lays text out
-    /// verbatim. Threaded into the bridge via [`BridgeOptions::echo_char`]
+    /// verbatim. Threaded into the bridge via [`crate::bridge::BridgeOptions::echo_char`]
     /// from `layout_full`. See [`set_echo_char`](Self::set_echo_char).
     echo_char: Option<char>,
     cursors: Vec<CursorDisplay>,
@@ -1499,7 +1499,7 @@ impl DocumentFlow {
     /// already-converted glyphs until they next re-shape. The incremental
     /// `relayout_block` path takes pre-converted [`BlockLayoutParams`], so
     /// hosts driving that path must thread the same echo char through
-    /// their own [`BridgeOptions`].
+    /// their own [`crate::bridge::BridgeOptions`].
     pub fn set_echo_char(&mut self, echo: Option<char>) {
         self.echo_char = echo;
     }

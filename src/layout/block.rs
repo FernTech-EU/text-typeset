@@ -71,7 +71,7 @@ pub struct FragmentParams {
     pub text: String,
     /// **Byte** offset of this fragment's first character inside the
     /// owning block's text. Lifted into glyph clusters by
-    /// [`crate::layout::paragraph::flatten_runs`] so glyph clusters
+    /// `paragraph::flatten_runs` so glyph clusters
     /// can be compared directly against `unicode-linebreak` break
     /// positions (also bytes) and against the block-level text used
     /// for `byte_offset_to_char_offset` conversion. Hosts threading

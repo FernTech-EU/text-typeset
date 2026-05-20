@@ -37,7 +37,7 @@
 //! [`DocumentFlow`] instances. Instead it bumps a monotonic
 //! `scale_generation` counter every time the scale factor changes.
 //! Each `DocumentFlow` remembers the generation it was last laid out
-//! at. Call [`DocumentFlow::layout_dirty_for_scale`] from the
+//! at. Call [`crate::DocumentFlow::layout_dirty_for_scale`] from the
 //! framework side to ask "does this flow need a relayout?" and re-run
 //! `layout_full` when the answer is yes.
 

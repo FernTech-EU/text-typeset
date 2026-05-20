@@ -1,7 +1,7 @@
 /// Opaque handle to a registered font face.
 ///
-/// Obtained from [`crate::Typesetter::register_font`] or [`crate::Typesetter::register_font_as`].
-/// Pass to [`crate::Typesetter::set_default_font`] to make it the default.
+/// Obtained from [`crate::TextFontService::register_font`] or [`crate::TextFontService::register_font_as`].
+/// Pass to [`crate::TextFontService::set_default_font`] to make it the default.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct FontFaceId(pub u32);
 
@@ -9,7 +9,7 @@ pub struct FontFaceId(pub u32);
 
 /// Everything needed to draw one frame.
 ///
-/// Produced by [`crate::Typesetter::render`]. Contains glyph quads (textured rectangles
+/// Produced by [`crate::DocumentFlow::render`]. Contains glyph quads (textured rectangles
 /// from the atlas), inline image placeholders, and decoration rectangles
 /// (selections, cursor, underlines, table borders, etc.).
 ///
@@ -182,7 +182,7 @@ pub enum CursorAffinity {
     Upstream,
 }
 
-/// Result of [`crate::Typesetter::hit_test`] - maps a screen-space point to a
+/// Result of [`crate::DocumentFlow::hit_test`] - maps a screen-space point to a
 /// document position.
 pub struct HitTestResult {
     /// Absolute character position in the document.
@@ -235,9 +235,9 @@ pub enum HitRegion {
 /// Cursor display state for rendering.
 ///
 /// The adapter reads cursor position from text-document's `TextCursor`
-/// and creates this struct to feed to [`crate::Typesetter::set_cursor`].
+/// and creates this struct to feed to [`crate::DocumentFlow::set_cursor`].
 /// text-typeset uses it to generate caret and selection decorations
-/// in the next [`crate::Typesetter::render`] call.
+/// in the next [`crate::DocumentFlow::render`] call.
 pub struct CursorDisplay {
     /// Cursor position (character offset in the document).
     pub position: usize,
@@ -263,7 +263,7 @@ pub struct CursorDisplay {
 
 /// Visual position and size of a laid-out block.
 ///
-/// Returned by [`crate::Typesetter::block_visual_info`].
+/// Returned by [`crate::DocumentFlow::block_visual_info`].
 pub struct BlockVisualInfo {
     /// Block ID (matches `BlockSnapshot::block_id`).
     pub block_id: usize,
@@ -297,7 +297,7 @@ pub struct TextFormat {
     pub color: Option<[f32; 4]>,
 }
 
-/// Result of [`crate::Typesetter::layout_single_line`].
+/// Result of [`crate::DocumentFlow::layout_single_line`].
 ///
 /// Contains the measured dimensions and GPU-ready glyph quads for a
 /// single line of text. No flow layout, line breaking, or bidi analysis
@@ -320,11 +320,11 @@ pub struct SingleLineResult {
     pub glyphs: Vec<GlyphQuad>,
     /// Per-glyph cache keys, parallel to `glyphs`. Callers that cache
     /// glyph output externally should pass these back to
-    /// [`TextFontService::touch_glyphs`] each frame to prevent the
+    /// [`crate::TextFontService::touch_glyphs`] each frame to prevent the
     /// atlas from evicting still-visible glyphs.
     pub glyph_keys: Vec<crate::atlas::cache::GlyphCacheKey>,
     /// Per-span bounding rectangles for markup-aware layout
-    /// ([`crate::Typesetter::layout_single_line_markup`]). Empty for
+    /// ([`crate::DocumentFlow::layout_single_line_markup`]). Empty for
     /// the plain-text layout path.
     pub spans: Vec<LaidOutSpan>,
 }
@@ -352,7 +352,7 @@ pub enum LaidOutSpanKind {
     Link { url: String },
 }
 
-/// Result of [`crate::Typesetter::layout_paragraph`].
+/// Result of [`crate::DocumentFlow::layout_paragraph`].
 ///
 /// Contains the measured dimensions and GPU-ready glyph quads for a
 /// multi-line paragraph wrapped at a fixed width. Glyphs are positioned
@@ -387,7 +387,7 @@ pub struct ParagraphResult {
     /// [`SingleLineResult::glyph_keys`].
     pub glyph_keys: Vec<crate::atlas::cache::GlyphCacheKey>,
     /// Per-span bounding rectangles for markup-aware layout
-    /// ([`crate::Typesetter::layout_paragraph_markup`]). Empty for
+    /// ([`crate::DocumentFlow::layout_paragraph_markup`]). Empty for
     /// the plain-text layout path.
     pub spans: Vec<LaidOutSpan>,
 }
