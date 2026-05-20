@@ -35,6 +35,16 @@ pub struct BridgeOptions {
     /// engine-level default text colour. Only applied when the run
     /// carries no explicit `foreground_color`.
     pub code_block_foreground: Option<[f32; 4]>,
+    /// When `Some(c)`, every character of every block laid out with
+    /// these options is replaced with `c` — one echo char per source
+    /// `char` — before shaping. This is the password / secure-field
+    /// masking path: the real text never reaches the shaper or the
+    /// glyph atlas, only the echo character does. Emitting one echo per
+    /// source `char` (not per grapheme) preserves char counts, so the
+    /// engine's char-indexed caret / selection / hit-test stay aligned
+    /// with the host document's positions. `None` (default) lays text
+    /// out verbatim.
+    pub echo_char: Option<char>,
 }
 
 impl Default for BridgeOptions {
@@ -42,6 +52,7 @@ impl Default for BridgeOptions {
         Self {
             code_block_background: [0.95, 0.95, 0.95, 1.0],
             code_block_foreground: None,
+            echo_char: None,
         }
     }
 }
@@ -168,7 +179,7 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
         _ => None,
     };
 
-    BlockLayoutParams {
+    let mut params = BlockLayoutParams {
         block_id: block.block_id,
         position: block.position,
         text: block.text.clone(),
@@ -203,7 +214,45 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
                     None
                 }
             }),
+    };
+
+    if let Some(echo) = opts.echo_char {
+        mask_block_params(&mut params, echo);
     }
+
+    params
+}
+
+/// Replace every text fragment's content with `echo` repeated once per
+/// source `char`, rewriting the block text and fragment byte offsets to
+/// match. Image-placeholder fragments pass through unchanged (only their
+/// byte offset shifts). Used for password / secure-field masking: the
+/// plaintext is substituted here, before shaping, so it never reaches
+/// the shaper or the glyph atlas. Char counts are preserved per
+/// fragment, keeping the engine's char-indexed caret / selection /
+/// hit-test aligned with the host's real document positions.
+fn mask_block_params(params: &mut BlockLayoutParams, echo: char) {
+    if params.fragments.is_empty() {
+        params.text = echo.to_string().repeat(params.text.chars().count());
+        return;
+    }
+    let mut masked_block = String::new();
+    let mut byte_cursor = 0usize;
+    for frag in params.fragments.iter_mut() {
+        frag.offset = byte_cursor;
+        if frag.image_name.is_some() {
+            // Inline image placeholder — keep the object-replacement
+            // character intact; only its byte offset shifts.
+            masked_block.push_str(&frag.text);
+            byte_cursor += frag.text.len();
+            continue;
+        }
+        let masked = echo.to_string().repeat(frag.text.chars().count());
+        byte_cursor += masked.len();
+        masked_block.push_str(&masked);
+        frag.text = masked;
+    }
+    params.text = masked_block;
 }
 
 fn convert_fragment(

@@ -145,6 +145,13 @@ pub struct DocumentFlow {
     /// explicit `foreground_color`. `None` keeps the engine's default
     /// `text_color`. See [`set_code_block_foreground`].
     code_block_foreground: Option<[f32; 4]>,
+    /// Echo / masking character for secure (password) fields. When
+    /// `Some(c)`, every character laid out by `layout_full` is replaced
+    /// with `c` before shaping, so the real text never reaches the
+    /// shaper or the glyph atlas. `None` (default) lays text out
+    /// verbatim. Threaded into the bridge via [`BridgeOptions::echo_char`]
+    /// from `layout_full`. See [`set_echo_char`](Self::set_echo_char).
+    echo_char: Option<char>,
     cursors: Vec<CursorDisplay>,
     zoom: f32,
     rendered_zoom: f32,
@@ -178,6 +185,7 @@ impl DocumentFlow {
             text_color: [0.0, 0.0, 0.0, 1.0],
             code_block_background: [0.95, 0.95, 0.95, 1.0],
             code_block_foreground: None,
+            echo_char: None,
             cursors: Vec::new(),
             zoom: 1.0,
             rendered_zoom: f32::NAN,
@@ -338,6 +346,7 @@ impl DocumentFlow {
         let opts = BridgeOptions {
             code_block_background: self.code_block_background,
             code_block_foreground: self.code_block_foreground,
+            echo_char: self.echo_char,
         };
         let converted = convert_flow_with(flow, &opts);
 
@@ -1475,6 +1484,29 @@ impl DocumentFlow {
     /// Current code-block foreground override.
     pub fn code_block_foreground(&self) -> Option<[f32; 4]> {
         self.code_block_foreground
+    }
+
+    /// Set the echo / masking character for secure (password) fields.
+    ///
+    /// When `Some(c)`, every character laid out by future `layout_full`
+    /// calls is replaced with `c` before shaping, so the real text never
+    /// reaches the shaper or the glyph atlas. `None` (default) lays text
+    /// out verbatim. One echo char is emitted per source `char`,
+    /// preserving char counts so caret / selection / hit-test (all
+    /// char-indexed) stay aligned with the host document's positions.
+    ///
+    /// Affects future `layout_full` calls; existing layouts keep their
+    /// already-converted glyphs until they next re-shape. The incremental
+    /// `relayout_block` path takes pre-converted [`BlockLayoutParams`], so
+    /// hosts driving that path must thread the same echo char through
+    /// their own [`BridgeOptions`].
+    pub fn set_echo_char(&mut self, echo: Option<char>) {
+        self.echo_char = echo;
+    }
+
+    /// Current echo / masking character, if any.
+    pub fn echo_char(&self) -> Option<char> {
+        self.echo_char
     }
 
     // ── Scrolling helpers ──────────────────────────────────────
