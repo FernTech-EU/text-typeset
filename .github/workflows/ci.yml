@@ -35,13 +35,14 @@ env:
 jobs:
   ci:
     name: CI
-    needs: [test, check, rustfmt, clippy, docs, coverage]
+    needs: [test-linux, test-other, check, rustfmt, clippy, docs, coverage]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs passed
         run: |
-          if [[ "${{ needs.test.result }}" != "success" ]] || \
+          if [[ "${{ needs.test-linux.result }}" != "success" ]] || \
+             [[ "${{ needs.test-other.result }}" != "success" ]] || \
              [[ "${{ needs.check.result }}" != "success" ]] || \
              [[ "${{ needs.rustfmt.result }}" != "success" ]] || \
              [[ "${{ needs.docs.result }}" != "success" ]]; then
@@ -50,15 +51,40 @@ jobs:
           fi
           echo "All jobs passed"
 
-  test:
+  test-linux:
+    name: Test (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux
+
+      - name: Strip path dependencies
+        uses: ./.github/actions/strip-path-deps
+
+      - name: Build
+        run: cargo build --workspace --all-targets
+
+      - name: Test
+        run: cargo test --workspace
+
+  test-other:
     name: Test (${{ matrix.name }})
+    needs: test-linux
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: linux
-            os: ubuntu-latest
-            rust: stable
           - name: windows
             os: windows-latest
             rust: stable
