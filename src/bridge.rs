@@ -379,7 +379,9 @@ fn convert_underline_style(format: &text_document::TextFormat) -> crate::types::
 }
 
 /// Map a raw `text_document::UnderlineStyle` to the typesetter enum.
-fn convert_underline_style_value(s: &text_document::UnderlineStyle) -> crate::types::UnderlineStyle {
+fn convert_underline_style_value(
+    s: &text_document::UnderlineStyle,
+) -> crate::types::UnderlineStyle {
     use crate::types::UnderlineStyle;
     match s {
         text_document::UnderlineStyle::SingleUnderline => UnderlineStyle::Single,

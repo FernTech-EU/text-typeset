@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use crate::font::registry::FontRegistry;
-use crate::layout::block::{BlockLayout, BlockLayoutParams, PaintSpan, apply_paint_spans, layout_block};
+use crate::layout::block::{
+    BlockLayout, BlockLayoutParams, PaintSpan, apply_paint_spans, layout_block,
+};
 use crate::layout::frame::{FrameLayout, FrameLayoutParams, layout_frame};
 use crate::layout::table::{TableLayout, TableLayoutParams, layout_table};
 

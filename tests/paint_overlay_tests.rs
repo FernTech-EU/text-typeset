@@ -19,7 +19,9 @@ fn colors(ts: &mut Typesetter) -> Vec<[f32; 4]> {
     ts.render().glyphs.iter().map(|g| g.color).collect()
 }
 fn is(c: [f32; 4], target: [f32; 4]) -> bool {
-    c.iter().zip(target.iter()).all(|(a, b)| (a - b).abs() < 0.02)
+    c.iter()
+        .zip(target.iter())
+        .all(|(a, b)| (a - b).abs() < 0.02)
 }
 
 fn laid_out(text: &str) -> Typesetter {
@@ -71,7 +73,10 @@ fn partial_span_splits_run_but_preserves_positions() {
     assert_eq!(positions(&mut ts), base);
     let cs = colors(&mut ts);
     assert!(cs.iter().any(|c| is(*c, RED)), "the span range is red");
-    assert!(cs.iter().any(|c| !is(*c, RED)), "outside the span is not red");
+    assert!(
+        cs.iter().any(|c| !is(*c, RED)),
+        "outside the span is not red"
+    );
 }
 
 #[test]
@@ -95,9 +100,15 @@ fn background_span_emits_text_background_decoration() {
         .iter()
         .filter(|d| d.kind == DecorationKind::TextBackground)
         .collect();
-    assert!(!bg.is_empty(), "background overlay must emit a TextBackground rect");
-    assert!(bg.iter().all(|d| d.rect[2] > 0.0), "rects have positive width");
-    drop(frame);
+    assert!(
+        !bg.is_empty(),
+        "background overlay must emit a TextBackground rect"
+    );
+    assert!(
+        bg.iter().all(|d| d.rect[2] > 0.0),
+        "rects have positive width"
+    );
+    let _ = frame;
     // And it did not reflow.
     assert_eq!(positions(&mut ts), base);
 }
@@ -247,6 +258,12 @@ fn overlapping_spans_last_wins() {
         ],
     );
     let cs = colors(&mut ts);
-    assert!(cs.iter().any(|c| is(*c, BLUE)), "overlap resolves to last span (blue)");
-    assert!(cs.iter().any(|c| is(*c, RED)), "non-overlapping prefix stays red");
+    assert!(
+        cs.iter().any(|c| is(*c, BLUE)),
+        "overlap resolves to last span (blue)"
+    );
+    assert!(
+        cs.iter().any(|c| is(*c, RED)),
+        "non-overlapping prefix stays red"
+    );
 }

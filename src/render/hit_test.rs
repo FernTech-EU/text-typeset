@@ -115,8 +115,7 @@ fn nearest_preceding_caret(
     let mut best_rect: Option<[f32; 4]> = None;
 
     let mut consider = |block: &BlockLayout, offset_x: f32, offset_y: f32| {
-        let block_end =
-            block.position + block.lines.last().map(|l| l.char_range.end).unwrap_or(0);
+        let block_end = block.position + block.lines.last().map(|l| l.char_range.end).unwrap_or(0);
         if block_end > position {
             return;
         }
