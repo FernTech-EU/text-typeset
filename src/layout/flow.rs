@@ -249,14 +249,24 @@ impl FlowLayout {
 
     /// After an incremental relayout of `block_id`, re-capture its (base-colored)
     /// shaped output as the new base and re-apply its pending overlay in place.
-    /// No-op when no overlay is active.
+    ///
+    /// The base re-capture happens unconditionally — even when no overlay is
+    /// currently active. The fresh shaped output IS the new base, and a later
+    /// `apply_block_paint_spans` (the engine re-applying syntax / search /
+    /// spell highlights after an edit) overlays from `base_blocks`. If we
+    /// skipped the re-capture when no spans were pending, that overlay would
+    /// re-derive the block from the STALE pre-edit base and silently clobber
+    /// the just-typed text (visible only in highlights-on views; a full
+    /// re-layout from a resize would restore it).
     fn refresh_base_and_overlay_block(&mut self, block_id: usize) {
-        if self.pending_paint_spans.is_empty() {
-            return;
-        }
         let fresh = find_block_ref(self, block_id).cloned();
         if let Some(b) = fresh {
             self.base_blocks.insert(block_id, b);
+        }
+        // Nothing to overlay if no block carries pending paint spans — the
+        // freshly-reshaped block already holds the correct base-colored output.
+        if self.pending_paint_spans.is_empty() {
+            return;
         }
         let base = &self.base_blocks;
         let pending = &self.pending_paint_spans;

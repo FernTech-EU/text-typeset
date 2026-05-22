@@ -160,6 +160,72 @@ fn reapplying_overlay_does_not_compound() {
     );
 }
 
+/// Regression: an incremental block edit followed by a paint-overlay pass must
+/// render the EDITED text, not the pre-edit base. The editor (highlights on)
+/// reshapes one block then calls `apply_block_paint_spans`; if the base block
+/// is not refreshed by the relayout, the overlay re-derives the block from the
+/// stale base and silently clobbers the just-typed characters. A highlights-off
+/// view skips the overlay and was unaffected — which is why the bug presented
+/// as "the editor pane drops edits while the read-only preview shows them".
+#[test]
+fn edit_then_empty_overlay_renders_new_text_not_stale_base() {
+    let mut ts = laid_out("Hello");
+    let before = ts.render().glyphs.len();
+    assert!(before > 0);
+
+    // Simulate a single-block edit: reshape block 1 with longer text.
+    ts.relayout_block(&make_block(1, "Hello world"));
+    let after_edit = ts.render().glyphs.len();
+    assert!(
+        after_edit > before,
+        "the reshape itself must add glyphs for the new text"
+    );
+
+    // The editor's highlights-on path then re-applies the block's paint spans.
+    // With no syntax/search highlight on this block the span set is empty —
+    // this used to reset the block to the STALE base ("Hello"), losing the edit.
+    let applied = ts.flow.apply_block_paint_spans(1, &[]);
+    assert!(applied, "top-level block must be found for overlay");
+
+    assert_eq!(
+        ts.render().glyphs.len(),
+        after_edit,
+        "empty overlay after an edit must preserve the edited text, not revert \
+         to the pre-edit base"
+    );
+}
+
+/// Same regression, but with a NON-empty overlay (the char landed inside a
+/// highlighted run). The recolor must apply on top of the FRESH geometry.
+#[test]
+fn edit_then_nonempty_overlay_keeps_edited_glyph_count() {
+    let mut ts = laid_out("foo");
+    let _ = ts.render();
+
+    ts.relayout_block(&make_block(1, "foo bar baz"));
+    let after_edit = ts.render().glyphs.len();
+
+    ts.flow.apply_block_paint_spans(
+        1,
+        &[PaintSpan {
+            char_start: 0,
+            char_end: 3,
+            foreground_color: Some(RED),
+            ..Default::default()
+        }],
+    );
+
+    assert_eq!(
+        ts.render().glyphs.len(),
+        after_edit,
+        "recolor must overlay onto the edited geometry, not the stale base"
+    );
+    assert!(
+        colors(&mut ts).iter().any(|c| is(*c, RED)),
+        "the highlight still applies"
+    );
+}
+
 #[test]
 fn overlapping_spans_last_wins() {
     let mut ts = laid_out("ABCD");
