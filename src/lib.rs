@@ -90,6 +90,7 @@ mod document_flow;
 mod font_service;
 
 // Public API
+pub use layout::block::{PaintSpan, apply_paint_spans};
 pub use layout::inline_markup::{InlineAttrs, InlineMarkup, InlineSpan};
 pub use types::{
     BlockVisualInfo, CharacterGeometry, CursorAffinity, CursorDisplay, DecorationKind,

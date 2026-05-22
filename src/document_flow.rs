@@ -386,6 +386,10 @@ impl DocumentFlow {
             }
         }
 
+        // Capture the freshly-shaped blocks as the paint-overlay base. The
+        // engine applies paint spans afterward (recolor without reshape).
+        self.flow_layout.refresh_base_blocks();
+
         self.note_layout_done(service);
     }
 
@@ -468,6 +472,27 @@ impl DocumentFlow {
             .relayout_block(&service.font_registry, params, self.layout_width());
         self.note_layout_done(service);
         Ok(())
+    }
+
+    /// Replace the paint-only color overlay for the whole flow, re-derived from
+    /// the captured base layout. Recolors without reshaping or reflowing — the
+    /// fast path for search / spell / paint-only syntax highlights. Call
+    /// `render` afterward to refresh the GPU frame.
+    pub fn apply_paint_spans_for(
+        &mut self,
+        spans_by_block: std::collections::HashMap<usize, Vec<crate::layout::block::PaintSpan>>,
+    ) {
+        self.flow_layout.apply_paint_spans_for(spans_by_block);
+    }
+
+    /// Apply (or clear) the paint overlay for a single block. Returns `false`
+    /// if the block has no captured base (no full layout yet).
+    pub fn apply_block_paint_spans(
+        &mut self,
+        block_id: usize,
+        spans: &[crate::layout::block::PaintSpan],
+    ) -> bool {
+        self.flow_layout.apply_block_paint_spans(block_id, spans)
     }
 
     fn note_layout_done(&mut self, service: &TextFontService) {

@@ -86,8 +86,113 @@ pub fn caret_rect(
         }
     }
 
-    // Fallback: top-left
+    // Fallback: the position is not covered by any block — this happens for
+    // positions that sit on a non-text anchor in the document's char space,
+    // most notably the 1-char U+FFFC table-anchor sentinel (which lives
+    // between the block before a table and the table's first cell). Map it to
+    // the caret at the END of the nearest preceding block so the caret lands
+    // at a sensible location (just before the table) with a monotonic y,
+    // rather than jumping to the document's top-left corner.
+    if let Some(rect) = nearest_preceding_caret(flow, scroll_offset, position) {
+        return rect;
+    }
+
+    // Last resort (position precedes all content): top-left.
     [0.0, -scroll_offset, 2.0, 16.0]
+}
+
+/// Caret at the end of the block with the greatest end-position `<= position`,
+/// searching frames, table cells, and top-level blocks (the same sources as
+/// [`caret_rect`]). Used as a fallback when `position` falls in a gap not
+/// covered by any block (e.g. a table-anchor sentinel). Returns `None` when no
+/// block ends at or before `position`.
+fn nearest_preceding_caret(
+    flow: &FlowLayout,
+    scroll_offset: f32,
+    position: usize,
+) -> Option<[f32; 4]> {
+    let mut best_end: Option<usize> = None;
+    let mut best_rect: Option<[f32; 4]> = None;
+
+    let mut consider = |block: &BlockLayout, offset_x: f32, offset_y: f32| {
+        let block_end = block.position + block.lines.last().map(|l| l.char_range.end).unwrap_or(0);
+        if block_end > position {
+            return;
+        }
+        if best_end.is_some_and(|be| block_end < be) {
+            return;
+        }
+        if let Some(rect) = caret_rect_in_block(
+            block,
+            block_end,
+            CursorAffinity::Downstream,
+            scroll_offset,
+            offset_x,
+            offset_y,
+        ) {
+            best_end = Some(block_end);
+            best_rect = Some(rect);
+        }
+    };
+
+    // Top-level blocks.
+    for item in &flow.flow_order {
+        if let FlowItem::Block { block_id, .. } = item
+            && let Some(block) = flow.blocks.get(block_id)
+        {
+            consider(block, 0.0, 0.0);
+        }
+    }
+    // Top-level table cells.
+    for table in flow.tables.values() {
+        for cell in &table.cell_layouts {
+            if cell.row >= table.row_ys.len() || cell.column >= table.column_xs.len() {
+                continue;
+            }
+            let offset_x = table.column_xs[cell.column];
+            let offset_y = table.y + table.row_ys[cell.row];
+            for block in &cell.blocks {
+                consider(block, offset_x, offset_y);
+            }
+        }
+    }
+    // Frames (recursively): their blocks and table cells.
+    for frame in flow.frames.values() {
+        consider_frame_blocks(frame, 0.0, 0.0, &mut consider);
+    }
+
+    best_rect
+}
+
+/// Visit every block inside a frame (its own blocks, its tables' cells, and
+/// nested frames) with the absolute (offset_x, offset_y) of its container,
+/// invoking `f` for each. Mirrors `caret_rect_in_frame`'s traversal.
+fn consider_frame_blocks(
+    frame: &crate::layout::frame::FrameLayout,
+    base_x: f32,
+    base_y: f32,
+    f: &mut impl FnMut(&BlockLayout, f32, f32),
+) {
+    let fx = base_x + frame.x + frame.content_x;
+    let fy = base_y + frame.y + frame.content_y;
+    for table in &frame.tables {
+        for cell in &table.cell_layouts {
+            if cell.row >= table.row_ys.len() || cell.column >= table.column_xs.len() {
+                continue;
+            }
+            let offset_x = fx + table.column_xs[cell.column];
+            let offset_y = fy + table.y + table.row_ys[cell.row];
+            for block in &cell.blocks {
+                f(block, offset_x, offset_y);
+            }
+        }
+    }
+    for block in &frame.blocks {
+        f(block, fx, fy);
+    }
+    for nested in &frame.frames {
+        consider_frame_blocks(nested, fx, fy, f);
+    }
 }
 
 // ── Internal helpers ────────────────────────────────────────────

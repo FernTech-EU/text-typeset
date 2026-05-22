@@ -6,6 +6,7 @@ use crate::shaping::run::ShapedRun;
 use crate::shaping::shaper::{FontMetricsPx, font_metrics_px, shape_text};
 
 /// Computed layout for a single block (paragraph).
+#[derive(Clone)]
 pub struct BlockLayout {
     pub block_id: usize,
     /// Document character position of the block start.
@@ -28,6 +29,7 @@ pub struct BlockLayout {
 }
 
 /// A shaped list marker ready for rendering.
+#[derive(Clone)]
 pub struct ShapedListMarker {
     pub run: ShapedRun,
     /// X position of the marker (relative to block left edge, before content indent).
@@ -276,6 +278,193 @@ pub fn layout_block(
         right_margin: params.right_margin,
         list_marker,
         background_color: params.background_color,
+    }
+}
+
+/// A resolved paint-only color overlay span for one character range of a block.
+///
+/// `char_start`/`char_end` are **block-relative character offsets** — the same
+/// space as the post-layout `ShapedGlyph::cluster` values (see
+/// `break_into_lines`, which converts clusters to char offsets). Each field is
+/// `None` when the overlay does not override it (the base run's value is kept).
+/// Applying paint spans never changes glyph geometry, advances, or line breaks
+/// — only color / decoration attributes — so the layout does not reflow.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PaintSpan {
+    pub char_start: usize,
+    pub char_end: usize,
+    pub foreground_color: Option<[f32; 4]>,
+    pub underline_color: Option<[f32; 4]>,
+    pub background_color: Option<[f32; 4]>,
+    pub underline_style: Option<crate::types::UnderlineStyle>,
+    pub overline: Option<bool>,
+    pub strikeout: Option<bool>,
+}
+
+/// The effective set of overrides for one glyph, used to group consecutive
+/// glyphs that share the same paint result into a single output run.
+#[derive(Clone, Default, PartialEq)]
+struct PaintOverride {
+    foreground_color: Option<[f32; 4]>,
+    underline_color: Option<[f32; 4]>,
+    background_color: Option<[f32; 4]>,
+    underline_style: Option<crate::types::UnderlineStyle>,
+    overline: Option<bool>,
+    strikeout: Option<bool>,
+}
+
+impl PaintOverride {
+    fn is_noop(&self) -> bool {
+        *self == PaintOverride::default()
+    }
+
+    /// Merge the overlapping spans covering `char_off` (last span wins per
+    /// field). Overlay spans from `extract_paint_spans` are already disjoint,
+    /// but last-wins keeps this correct for arbitrary inputs.
+    fn for_char(char_off: usize, spans: &[PaintSpan]) -> Self {
+        let mut o = PaintOverride::default();
+        for s in spans {
+            if s.char_start <= char_off && char_off < s.char_end {
+                if s.foreground_color.is_some() {
+                    o.foreground_color = s.foreground_color;
+                }
+                if s.underline_color.is_some() {
+                    o.underline_color = s.underline_color;
+                }
+                if s.background_color.is_some() {
+                    o.background_color = s.background_color;
+                }
+                if s.underline_style.is_some() {
+                    o.underline_style = s.underline_style;
+                }
+                if s.overline.is_some() {
+                    o.overline = s.overline;
+                }
+                if s.strikeout.is_some() {
+                    o.strikeout = s.strikeout;
+                }
+            }
+        }
+        o
+    }
+
+    /// Apply this override onto a positioned run segment, writing color /
+    /// decoration fields on BOTH the shaped run and its duplicated
+    /// `RunDecorations` (the renderer reads glyph color from the former and
+    /// decoration rects from the latter). `None` fields keep the base value.
+    fn apply(&self, run: &mut crate::layout::line::PositionedRun) {
+        if let Some(c) = self.foreground_color {
+            run.shaped_run.foreground_color = Some(c);
+            run.decorations.foreground_color = Some(c);
+        }
+        if let Some(c) = self.underline_color {
+            run.shaped_run.underline_color = Some(c);
+            run.decorations.underline_color = Some(c);
+        }
+        if let Some(c) = self.background_color {
+            run.shaped_run.background_color = Some(c);
+            run.decorations.background_color = Some(c);
+        }
+        if let Some(s) = self.underline_style {
+            run.shaped_run.underline_style = s;
+            run.decorations.underline_style = s;
+        }
+        if let Some(b) = self.overline {
+            run.shaped_run.overline = b;
+            run.decorations.overline = b;
+        }
+        if let Some(b) = self.strikeout {
+            run.shaped_run.strikeout = b;
+            run.decorations.strikeout = b;
+        }
+    }
+}
+
+/// Apply paint-only color spans to a base [`BlockLayout`], returning a recolored
+/// clone. The base is left untouched.
+///
+/// The result has byte-identical glyph positions, advances, line breaks, line
+/// widths, and block height to `base` — only color / decoration attributes
+/// differ. This is the "recolor without reshape/reflow" fast path: a run is
+/// split into segments at paint-span boundaries (snapped to glyph/cluster
+/// boundaries, never mid-cluster) and each segment's color fields are set.
+/// Splitting a run never alters any glyph advance, so line widths are preserved.
+///
+/// Empty `spans` returns an exact (color-preserving) clone of `base`.
+pub fn apply_paint_spans(base: &BlockLayout, spans: &[PaintSpan]) -> BlockLayout {
+    let mut out = base.clone();
+    if spans.is_empty() {
+        return out;
+    }
+    for line in &mut out.lines {
+        let mut new_runs: Vec<crate::layout::line::PositionedRun> =
+            Vec::with_capacity(line.runs.len());
+        for run in line.runs.drain(..) {
+            recolor_run_into(run, spans, &mut new_runs);
+        }
+        line.runs = new_runs;
+    }
+    out
+}
+
+/// Split `run` at paint-span boundaries and push the recolored segment(s) onto
+/// `out`. Image / glyph-less runs are passed through unchanged (paint overlays
+/// never recolor images).
+fn recolor_run_into(
+    run: crate::layout::line::PositionedRun,
+    spans: &[PaintSpan],
+    out: &mut Vec<crate::layout::line::PositionedRun>,
+) {
+    if run.shaped_run.glyphs.is_empty() || run.shaped_run.image_name.is_some() {
+        out.push(run);
+        return;
+    }
+
+    // Per-glyph effective override, in glyph (visual) order. Works for LTR and
+    // RTL alike: we group by adjacency in the glyph array, not by char order.
+    let overrides: Vec<PaintOverride> = run
+        .shaped_run
+        .glyphs
+        .iter()
+        .map(|g| PaintOverride::for_char(g.cluster as usize, spans))
+        .collect();
+
+    // Fast path: the whole run shares one override (the common case, and the
+    // only case when `spans` doesn't touch this run — then it's a no-op). Keep
+    // the base `advance_width` exactly so a cleared/uncovered run is identical.
+    if overrides.iter().all(|o| *o == overrides[0]) {
+        let mut seg = run;
+        overrides[0].apply(&mut seg);
+        out.push(seg);
+        return;
+    }
+
+    // Split into maximal runs of equal override.
+    let glyphs = run.shaped_run.glyphs.clone();
+    let mut seg_x = run.x;
+    let mut start = 0usize;
+    while start < glyphs.len() {
+        let ov = &overrides[start];
+        let mut end = start + 1;
+        while end < glyphs.len() && overrides[end] == *ov {
+            end += 1;
+        }
+        let seg_glyphs: Vec<crate::shaping::run::ShapedGlyph> = glyphs[start..end].to_vec();
+        let seg_advance: f32 = seg_glyphs.iter().map(|g| g.x_advance).sum();
+        let mut shaped = run.shaped_run.clone();
+        shaped.glyphs = seg_glyphs;
+        shaped.advance_width = seg_advance;
+        let mut seg = crate::layout::line::PositionedRun {
+            shaped_run: shaped,
+            x: seg_x,
+            decorations: run.decorations.clone(),
+        };
+        if !ov.is_noop() {
+            ov.apply(&mut seg);
+        }
+        out.push(seg);
+        seg_x += seg_advance;
+        start = end;
     }
 }
 
