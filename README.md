@@ -29,11 +29,11 @@ Put the service behind whatever smart pointer your host framework uses (an `Rc<R
 
 ## Features
 
-- **Text shaping** via [rustybuzz](https://crates.io/crates/rustybuzz) (Rust port of HarfBuzz) with OpenType feature support
+- **Text shaping** via [harfrust](https://crates.io/crates/harfrust) (Rust port of HarfBuzz) with OpenType feature support
 - **Font management** via [fontdb](https://crates.io/crates/fontdb) with CSS-spec font matching, generic family mapping, and glyph fallback
 - **Glyph rasterization** via [swash](https://crates.io/crates/swash) with color emoji support (COLR/CBDT)
 - **Glyph atlas** backed by [etagere](https://crates.io/crates/etagere) shelf packing with auto-grow and LRU eviction — shared across every widget through the `TextFontService`
-- **Paragraph layout** with line breaking ([unicode-linebreak](https://crates.io/crates/unicode-linebreak), UAX #14), four alignment modes (left, right, center, justify), and first-line indent
+- **Paragraph layout** with line breaking ([icu_segmenter](https://crates.io/crates/icu_segmenter), UAX #14), four alignment modes (left, right, center, justify), and first-line indent
 - **BiDi text** analysis via [unicode-bidi](https://crates.io/crates/unicode-bidi) with per-run directional shaping
 - **Tables** with column width distribution, cell layout, borders, and cell backgrounds
 - **Lists** with marker rendering (bullet, decimal, alpha, roman) at configurable indent levels
@@ -153,13 +153,14 @@ The service cannot reach into per-widget flows, so it cannot clear their layouts
 
 | Crate | Version | Purpose |
 | --- | --- | --- |
-| rustybuzz | 0.20 | OpenType shaping |
+| harfrust | 0.7 | OpenType shaping |
 | swash | 0.2 | Font metrics and glyph rasterization |
 | fontdb | 0.23 | Font discovery and CSS-spec matching |
 | etagere | 0.3 | Glyph atlas allocation (shelf packing) |
-| unicode-linebreak | 0.1 | Line break opportunities (UAX #14) |
+| icu_segmenter | 2 | Line break opportunities (UAX #14) |
 | unicode-bidi | 0.3 | Bidirectional text (UAX #9) |
-| text-document | -- | Document model (optional, default feature) |
+| thiserror | 2.0 | Error type derivation |
+| text-document | 1.5 | Document model (optional, default feature) |
 
 ## License
 
