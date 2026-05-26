@@ -1,11 +1,74 @@
 use std::collections::HashSet;
 use std::ops::Range;
+use std::sync::OnceLock;
 
-use unicode_linebreak::{BreakOpportunity, linebreaks};
+use icu_segmenter::LineSegmenter;
+use icu_segmenter::options::LineBreakOptions;
 
 use crate::layout::line::{LayoutLine, PositionedRun, RunDecorations};
 use crate::shaping::run::ShapedRun;
 use crate::shaping::shaper::FontMetricsPx;
+
+/// Whether a break opportunity *must* be taken (LB4/LB5 hard line
+/// break) or *may* be taken (regular UAX #14 break opportunity).
+///
+/// `icu_segmenter::LineSegmenter` doesn't distinguish the two — it just
+/// emits byte offsets — so we classify each emitted offset ourselves by
+/// looking at the line-break property of the preceding code point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BreakOpportunity {
+    Allowed,
+    Mandatory,
+}
+
+/// Shared compiled-data line segmenter. `LineSegmenter::new_auto`
+/// returns a `LineSegmenterBorrowed<'static>` (Copy, statically-baked
+/// CLDR data), but constructing it still touches the option-parsing
+/// path — cache once to keep `break_into_lines` allocation-free.
+fn line_segmenter() -> icu_segmenter::LineSegmenterBorrowed<'static> {
+    static CELL: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
+    *CELL.get_or_init(|| LineSegmenter::new_auto(LineBreakOptions::default()))
+}
+
+/// UAX #14 LB4/LB5: a break at `byte_offset` is mandatory iff the
+/// immediately-preceding code point is one of the hard line break
+/// characters (LF, CR, NEL, VT, FF, LS, PS). The CR+LF sequence is
+/// handled implicitly: the segmenter emits a single break after the
+/// LF, and the char before that offset is `\n` — mandatory.
+fn is_mandatory_break_at(text: &str, byte_offset: usize) -> bool {
+    if byte_offset == 0 {
+        return false;
+    }
+    let preceding = &text[..byte_offset];
+    matches!(
+        preceding.chars().next_back(),
+        Some(
+            '\n' | '\r'
+                | '\u{0085}'
+                | '\u{000B}'
+                | '\u{000C}'
+                | '\u{2028}'
+                | '\u{2029}'
+        )
+    )
+}
+
+/// Enumerate UAX #14 break opportunities in `text` and classify each
+/// as `Allowed` or `Mandatory`. Replaces the previous
+/// `unicode_linebreak::linebreaks(text)` call site one-to-one.
+fn enumerate_breaks(text: &str) -> Vec<(usize, BreakOpportunity)> {
+    line_segmenter()
+        .segment_str(text)
+        .map(|byte_offset| {
+            let kind = if is_mandatory_break_at(text, byte_offset) {
+                BreakOpportunity::Mandatory
+            } else {
+                BreakOpportunity::Allowed
+            };
+            (byte_offset, kind)
+        })
+        .collect()
+}
 
 /// Convert a byte offset within a UTF-8 string to a char offset.
 ///
@@ -60,8 +123,9 @@ pub fn break_into_lines(
         return vec![make_empty_line(metrics, 0..0)];
     }
 
-    // Get break opportunities from unicode-linebreak (byte offsets in text)
-    let breaks: Vec<(usize, BreakOpportunity)> = linebreaks(text).collect();
+    // Get UAX #14 break opportunities (byte offsets in text), each
+    // classified as Allowed or Mandatory.
+    let breaks: Vec<(usize, BreakOpportunity)> = enumerate_breaks(text);
 
     // Build sets of allowed and mandatory break positions (glyph indices)
     let (break_points, mandatory_breaks) = map_breaks_to_glyph_indices(&flat, &breaks);
