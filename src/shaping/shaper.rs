@@ -14,7 +14,7 @@ use crate::shaping::run::{ShapedGlyph, ShapedRun};
 fn units_per_em(bytes: &[u8], face_index: u32) -> Option<u16> {
     let font_ref = swash::FontRef::from_index(bytes, face_index as usize)?;
     let upem = font_ref.metrics(&[]).units_per_em;
-    if upem <= 0 { None } else { Some(upem) }
+    if upem == 0 { None } else { Some(upem) }
 }
 
 /// Text direction for shaping.

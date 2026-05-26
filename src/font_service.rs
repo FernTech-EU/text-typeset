@@ -356,7 +356,7 @@ impl TextFontService {
     /// or wholesale reset by
     /// [`set_scale_factor`](Self::set_scale_factor).
     ///
-    /// Per-widget [`DocumentFlow`]s stamp this value on every full
+    /// Per-widget [`crate::DocumentFlow`]s stamp this value on every full
     /// [`render`](crate::DocumentFlow::render) and refuse to reuse
     /// their cached glyph quads on subsequent
     /// [`render_cursor_only`](crate::DocumentFlow::render_cursor_only)

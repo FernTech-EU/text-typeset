@@ -59,8 +59,7 @@ pub fn rasterize_glyph(
     // renders as `.notdef`, which is *visibly* wrong instead of
     // silently scrambling neighboring glyphs everywhere they're sampled.
     let bytes_per_pixel = if is_color { 4 } else { 1 };
-    let expected_len =
-        (image.placement.width * image.placement.height) as usize * bytes_per_pixel;
+    let expected_len = (image.placement.width * image.placement.height) as usize * bytes_per_pixel;
     if image.data.len() != expected_len {
         debug_assert!(
             false,

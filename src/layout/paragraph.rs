@@ -42,14 +42,7 @@ fn is_mandatory_break_at(text: &str, byte_offset: usize) -> bool {
     let preceding = &text[..byte_offset];
     matches!(
         preceding.chars().next_back(),
-        Some(
-            '\n' | '\r'
-                | '\u{0085}'
-                | '\u{000B}'
-                | '\u{000C}'
-                | '\u{2028}'
-                | '\u{2029}'
-        )
+        Some('\n' | '\r' | '\u{0085}' | '\u{000B}' | '\u{000C}' | '\u{2028}' | '\u{2029}')
     )
 }
 

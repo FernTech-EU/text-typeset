@@ -43,7 +43,7 @@ pub struct RenderFrame {
     pub(crate) block_images: Vec<(usize, Vec<ImageQuad>)>,
     /// Per-block height snapshot for detecting height changes in incremental render.
     pub(crate) block_heights: std::collections::HashMap<usize, f32>,
-    /// Per-block glyph cache keys, parallel to [`block_glyphs`]. Used by
+    /// Per-block glyph cache keys, parallel to [`Self::block_glyphs`]. Used by
     /// [`crate::DocumentFlow::render_cursor_only`] and
     /// [`crate::DocumentFlow::render_block_only`] to mark every cached
     /// glyph as still-in-use in the shared `GlyphCache` — otherwise
@@ -52,8 +52,8 @@ pub struct RenderFrame {
     /// their atlas slots could be reallocated for unrelated glyphs,
     /// silently corrupting the cached `GlyphQuad`s' atlas references.
     pub(crate) block_glyph_keys: Vec<(usize, Vec<crate::atlas::cache::GlyphCacheKey>)>,
-    /// Flat glyph cache keys, parallel to [`glyphs`]. Rebuilt from
-    /// [`block_glyph_keys`] by `rebuild_flat_frame`; passed to
+    /// Flat glyph cache keys, parallel to [`Self::glyphs`]. Rebuilt from
+    /// [`Self::block_glyph_keys`] by `rebuild_flat_frame`; passed to
     /// [`crate::TextFontService::touch_glyphs`] on every cursor-only /
     /// block-only paint so the shared atlas keeps visible glyphs alive.
     pub(crate) glyph_keys: Vec<crate::atlas::cache::GlyphCacheKey>,
