@@ -1,8 +1,21 @@
-use rustybuzz::{Direction, Face, UnicodeBuffer};
+use harfrust::{Direction, FontRef, ShaperData, UnicodeBuffer};
 
 use crate::font::registry::FontRegistry;
 use crate::font::resolve::ResolvedFont;
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
+
+/// Read units-per-em for a font face.
+///
+/// `harfrust::FontRef` is a thin wrapper over read-fonts and exposes
+/// the `head` table only through the `read_fonts::TableProvider` trait,
+/// which harfrust doesn't re-export. Since we already depend on swash
+/// for `font_metrics_px` further down, we reuse swash's `Metrics` to
+/// pull UPEM — one less dependency surface to maintain.
+fn units_per_em(bytes: &[u8], face_index: u32) -> Option<u16> {
+    let font_ref = swash::FontRef::from_index(bytes, face_index as usize)?;
+    let upem = font_ref.metrics(&[]).units_per_em;
+    if upem <= 0 { None } else { Some(upem) }
+}
 
 /// Text direction for shaping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -137,17 +150,17 @@ pub fn shape_text_directed(
     direction: TextDirection,
 ) -> Option<ShapedRun> {
     let entry = registry.get(resolved.font_face_id)?;
-    let face = Face::from_slice(entry.bytes(), entry.face_index)?;
+    let font = FontRef::from_index(entry.bytes(), entry.face_index).ok()?;
 
-    let units_per_em = face.units_per_em() as f32;
-    if units_per_em == 0.0 {
+    let upem = units_per_em(entry.bytes(), entry.face_index).unwrap_or(0) as f32;
+    if upem == 0.0 {
         return None;
     }
     // Shape at physical ppem, then divide results by scale_factor so
     // downstream layout stays in logical pixels. See ResolvedFont.
     let sf = resolved.scale_factor.max(f32::MIN_POSITIVE);
     let physical_size = resolved.size_px * sf;
-    let physical_scale = physical_size / units_per_em;
+    let physical_scale = physical_size / upem;
     let inv_sf = 1.0 / sf;
 
     let mut buffer = UnicodeBuffer::new();
@@ -155,10 +168,17 @@ pub fn shape_text_directed(
     match direction {
         TextDirection::LeftToRight => buffer.set_direction(Direction::LeftToRight),
         TextDirection::RightToLeft => buffer.set_direction(Direction::RightToLeft),
-        TextDirection::Auto => {} // let rustybuzz guess
+        // harfrust panics if direction is left Invalid; explicitly
+        // guess script + language + direction from the buffer content.
+        TextDirection::Auto => buffer.guess_segment_properties(),
     }
 
-    let glyph_buffer = rustybuzz::shape(&face, &[], buffer);
+    // ShaperData preprocesses font tables for shaping. For one-shot
+    // shape calls we build it inline; a future optimisation can cache
+    // it per `FontFaceId` if profiling shows it matters.
+    let shaper_data = ShaperData::new(&font);
+    let shaper = shaper_data.shaper(&font).build();
+    let glyph_buffer = shaper.shape(buffer, &[]);
 
     let infos = glyph_buffer.glyph_infos();
     let positions = glyph_buffer.glyph_positions();
@@ -216,21 +236,26 @@ pub fn shape_text_with_buffer(
     buffer: UnicodeBuffer,
 ) -> Option<(ShapedRun, UnicodeBuffer)> {
     let entry = registry.get(resolved.font_face_id)?;
-    let face = Face::from_slice(entry.bytes(), entry.face_index)?;
+    let font = FontRef::from_index(entry.bytes(), entry.face_index).ok()?;
 
-    let units_per_em = face.units_per_em() as f32;
-    if units_per_em == 0.0 {
+    let upem = units_per_em(entry.bytes(), entry.face_index).unwrap_or(0) as f32;
+    if upem == 0.0 {
         return None;
     }
     let sf = resolved.scale_factor.max(f32::MIN_POSITIVE);
     let physical_size = resolved.size_px * sf;
-    let physical_scale = physical_size / units_per_em;
+    let physical_scale = physical_size / upem;
     let inv_sf = 1.0 / sf;
 
     let mut buffer = buffer;
     buffer.push_str(text);
+    // Recycled buffers come back without segment properties; explicitly
+    // guess them so harfrust doesn't panic on Direction::Invalid.
+    buffer.guess_segment_properties();
 
-    let glyph_buffer = rustybuzz::shape(&face, &[], buffer);
+    let shaper_data = ShaperData::new(&font);
+    let shaper = shaper_data.shaper(&font).build();
+    let glyph_buffer = shaper.shape(buffer, &[]);
 
     let infos = glyph_buffer.glyph_infos();
     let positions = glyph_buffer.glyph_positions();

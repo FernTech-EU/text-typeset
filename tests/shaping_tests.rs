@@ -167,7 +167,7 @@ fn shape_with_buffer_recycling() {
     let ts = make_typesetter();
     let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
 
-    let buffer = rustybuzz::UnicodeBuffer::new();
+    let buffer = harfrust::UnicodeBuffer::new();
     let (run1, buffer) =
         shape_text_with_buffer(ts.font_registry(), &resolved, "Hello", 0, buffer).unwrap();
     assert_eq!(run1.glyphs.len(), 5);
