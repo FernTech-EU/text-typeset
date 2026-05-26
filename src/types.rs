@@ -43,6 +43,27 @@ pub struct RenderFrame {
     pub(crate) block_images: Vec<(usize, Vec<ImageQuad>)>,
     /// Per-block height snapshot for detecting height changes in incremental render.
     pub(crate) block_heights: std::collections::HashMap<usize, f32>,
+    /// Per-block glyph cache keys, parallel to [`block_glyphs`]. Used by
+    /// [`crate::DocumentFlow::render_cursor_only`] and
+    /// [`crate::DocumentFlow::render_block_only`] to mark every cached
+    /// glyph as still-in-use in the shared `GlyphCache` — otherwise
+    /// glyphs reused via paint-cache hits (which never re-enter the
+    /// `cache.get()` path that refreshes timestamps) would age out and
+    /// their atlas slots could be reallocated for unrelated glyphs,
+    /// silently corrupting the cached `GlyphQuad`s' atlas references.
+    pub(crate) block_glyph_keys: Vec<(usize, Vec<crate::atlas::cache::GlyphCacheKey>)>,
+    /// Flat glyph cache keys, parallel to [`glyphs`]. Rebuilt from
+    /// [`block_glyph_keys`] by `rebuild_flat_frame`; passed to
+    /// [`crate::TextFontService::touch_glyphs`] on every cursor-only /
+    /// block-only paint so the shared atlas keeps visible glyphs alive.
+    pub(crate) glyph_keys: Vec<crate::atlas::cache::GlyphCacheKey>,
+    /// Snapshot of [`crate::TextFontService::eviction_epoch`] at the
+    /// moment this frame's atlas references were baked. Cursor-only
+    /// and block-only paths compare against the service's current
+    /// epoch and fall back to a full re-render if eviction has
+    /// happened since — defensive safety net behind the `touch_glyphs`
+    /// keep-alive mechanism.
+    pub(crate) atlas_eviction_epoch: u64,
 }
 
 /// A positioned glyph to draw as a textured quad from the atlas.
@@ -406,6 +427,9 @@ impl RenderFrame {
             block_decorations: Vec::new(),
             block_images: Vec::new(),
             block_heights: std::collections::HashMap::new(),
+            block_glyph_keys: Vec::new(),
+            glyph_keys: Vec::new(),
+            atlas_eviction_epoch: 0,
         }
     }
 }

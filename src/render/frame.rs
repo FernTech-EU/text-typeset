@@ -28,6 +28,7 @@ pub fn build_render_frame(
     selection_color: [f32; 4],
     text_color: [f32; 4],
     render_frame: &mut RenderFrame,
+    eviction_epoch: &mut u64,
 ) {
     let scale_factor = flow.scale_factor;
     render_frame.glyphs.clear();
@@ -37,10 +38,15 @@ pub fn build_render_frame(
     render_frame.block_decorations.clear();
     render_frame.block_images.clear();
     render_frame.block_heights.clear();
+    render_frame.block_glyph_keys.clear();
+    render_frame.glyph_keys.clear();
 
     // Advance generation and evict stale glyphs
     cache.advance_generation();
     let evicted = cache.evict_unused();
+    if !evicted.is_empty() {
+        *eviction_epoch = eviction_epoch.wrapping_add(1);
+    }
     for alloc_id in evicted {
         atlas.deallocate(alloc_id);
     }
@@ -68,6 +74,7 @@ pub fn build_render_frame(
                     // can reconstruct them (keyed by table_id).
                     let g_start = render_frame.glyphs.len();
                     let i_start = render_frame.images.len();
+                    let mut key_buf: Vec<GlyphCacheKey> = Vec::new();
                     render_table_cells(
                         table,
                         0.0,
@@ -81,11 +88,14 @@ pub fn build_render_frame(
                         text_color,
                         scale_factor,
                         render_frame,
+                        &mut key_buf,
                     );
                     let table_g: Vec<GlyphQuad> = render_frame.glyphs[g_start..].to_vec();
                     let table_i: Vec<ImageQuad> = render_frame.images[i_start..].to_vec();
+                    render_frame.glyph_keys.extend_from_slice(&key_buf);
                     render_frame.block_glyphs.push((*table_id, table_g));
                     render_frame.block_images.push((*table_id, table_i));
+                    render_frame.block_glyph_keys.push((*table_id, key_buf));
 
                     let decos = generate_table_decorations(table, scroll_offset);
                     render_frame.decorations.extend(decos);
@@ -105,6 +115,7 @@ pub fn build_render_frame(
                     // can reconstruct them (keyed by frame_id).
                     let g_start = render_frame.glyphs.len();
                     let i_start = render_frame.images.len();
+                    let mut key_buf: Vec<GlyphCacheKey> = Vec::new();
                     render_frame_layout(
                         frame_layout,
                         registry,
@@ -116,11 +127,14 @@ pub fn build_render_frame(
                         text_color,
                         scale_factor,
                         render_frame,
+                        &mut key_buf,
                     );
                     let frame_g: Vec<GlyphQuad> = render_frame.glyphs[g_start..].to_vec();
                     let frame_i: Vec<ImageQuad> = render_frame.images[i_start..].to_vec();
+                    render_frame.glyph_keys.extend_from_slice(&key_buf);
                     render_frame.block_glyphs.push((*frame_id, frame_g));
                     render_frame.block_images.push((*frame_id, frame_i));
+                    render_frame.block_glyph_keys.push((*frame_id, key_buf));
                 }
                 continue;
             }
@@ -135,6 +149,7 @@ pub fn build_render_frame(
             // Capture per-block glyphs and images
             let g_start = render_frame.glyphs.len();
             let i_start = render_frame.images.len();
+            let mut key_buf: Vec<GlyphCacheKey> = Vec::new();
             render_block_at_offset(
                 block,
                 0.0,
@@ -148,11 +163,14 @@ pub fn build_render_frame(
                 text_color,
                 scale_factor,
                 render_frame,
+                &mut key_buf,
             );
             let block_g: Vec<GlyphQuad> = render_frame.glyphs[g_start..].to_vec();
             let block_i: Vec<ImageQuad> = render_frame.images[i_start..].to_vec();
+            render_frame.glyph_keys.extend_from_slice(&key_buf);
             render_frame.block_glyphs.push((block_id, block_g));
             render_frame.block_images.push((block_id, block_i));
+            render_frame.block_glyph_keys.push((block_id, key_buf));
 
             let decos = generate_block_decorations(
                 block,
@@ -196,6 +214,9 @@ pub fn build_render_frame(
         render_frame.atlas_pixels.clone_from(&atlas.pixels);
         atlas.dirty = false;
     }
+    // Stamp the post-eviction epoch so subsequent cursor-only /
+    // block-only paint paths can detect cross-frame staleness.
+    render_frame.atlas_eviction_epoch = *eviction_epoch;
 }
 
 /// Render a block's glyphs at the given offset.
@@ -216,6 +237,7 @@ pub(crate) fn render_block_at_offset(
     default_text_color: [f32; 4],
     scale_factor: f32,
     render_frame: &mut RenderFrame,
+    glyph_keys: &mut Vec<GlyphCacheKey>,
 ) {
     // Render list marker on the first line (if present)
     if let Some(marker) = &block.list_marker
@@ -236,6 +258,7 @@ pub(crate) fn render_block_at_offset(
                 default_text_color,
                 scale_factor,
                 render_frame,
+                glyph_keys,
             );
         }
     }
@@ -288,6 +311,7 @@ pub(crate) fn render_block_at_offset(
                 default_text_color,
                 scale_factor,
                 render_frame,
+                glyph_keys,
             );
         }
     }
@@ -311,6 +335,7 @@ fn render_table_cells(
     default_text_color: [f32; 4],
     scale_factor: f32,
     render_frame: &mut RenderFrame,
+    glyph_keys: &mut Vec<GlyphCacheKey>,
 ) {
     for cell in &table.cell_layouts {
         if cell.row >= table.row_ys.len() || cell.column >= table.column_xs.len() {
@@ -333,6 +358,7 @@ fn render_table_cells(
                 default_text_color,
                 scale_factor,
                 render_frame,
+                glyph_keys,
             );
             let cell_w = table
                 .column_content_widths
@@ -367,6 +393,7 @@ fn render_frame_layout(
     default_text_color: [f32; 4],
     scale_factor: f32,
     render_frame: &mut RenderFrame,
+    glyph_keys: &mut Vec<GlyphCacheKey>,
 ) {
     let offset_x = frame.x + frame.content_x;
     let offset_y = frame.y + frame.content_y;
@@ -386,6 +413,7 @@ fn render_frame_layout(
             default_text_color,
             scale_factor,
             render_frame,
+            glyph_keys,
         );
         let decos = generate_block_decorations(
             block,
@@ -416,6 +444,7 @@ fn render_frame_layout(
             default_text_color,
             scale_factor,
             render_frame,
+            glyph_keys,
         );
     }
 
@@ -436,6 +465,7 @@ fn render_frame_layout(
             default_text_color,
             scale_factor,
             render_frame,
+            glyph_keys,
         );
     }
 
@@ -520,6 +550,7 @@ fn render_nested_frame(
     default_text_color: [f32; 4],
     scale_factor: f32,
     render_frame: &mut RenderFrame,
+    glyph_keys: &mut Vec<GlyphCacheKey>,
 ) {
     let frame_x = parent_x + nested.x;
     let frame_y = parent_y + nested.y;
@@ -541,6 +572,7 @@ fn render_nested_frame(
             default_text_color,
             scale_factor,
             render_frame,
+            glyph_keys,
         );
         let decos = generate_block_decorations(
             block,
@@ -571,6 +603,7 @@ fn render_nested_frame(
             default_text_color,
             scale_factor,
             render_frame,
+            glyph_keys,
         );
     }
 
@@ -589,6 +622,7 @@ fn render_nested_frame(
             default_text_color,
             scale_factor,
             render_frame,
+            glyph_keys,
         );
     }
 
@@ -630,6 +664,7 @@ fn render_run_glyphs(
     default_text_color: [f32; 4],
     scale_factor: f32,
     render_frame: &mut RenderFrame,
+    glyph_keys: &mut Vec<GlyphCacheKey>,
 ) {
     // Rasterize at physical ppem; the cache key uses the physical size so
     // different scale_factors never collide.
@@ -671,6 +706,7 @@ fn render_run_glyphs(
             run.weight as u32,
         );
         if let Some(cached) = cache.get(&cache_key) {
+            glyph_keys.push(cache_key);
             // CachedGlyph stores physical dims; convert to logical for the
             // quad's screen rect. The atlas rect stays physical (it's the
             // actual texture sub-region).

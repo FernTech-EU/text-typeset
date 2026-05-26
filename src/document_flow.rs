@@ -528,6 +528,7 @@ impl DocumentFlow {
             self.selection_color,
             self.text_color,
             &mut self.render_frame,
+            &mut service.eviction_epoch,
         );
         self.rendered_scroll_offset = self.scroll_offset;
         self.rendered_zoom = self.zoom;
@@ -555,6 +556,15 @@ impl DocumentFlow {
         if (self.scroll_offset - self.rendered_scroll_offset).abs() > 0.001
             || (self.zoom - self.rendered_zoom).abs() > 0.001
         {
+            return self.render(service);
+        }
+
+        // Defensive: if the atlas has dropped any entry since the last
+        // full render, our cached per-block glyph quads may now point
+        // at slots owned by unrelated glyphs. Fall back to a full
+        // re-render — `touch_glyphs` in `rebuild_flat_frame` is the
+        // primary keep-alive mechanism, this is the safety net.
+        if service.eviction_epoch != self.render_frame.atlas_eviction_epoch {
             return self.render(service);
         }
 
@@ -595,6 +605,7 @@ impl DocumentFlow {
         let scale_factor = service.scale_factor;
         let mut new_glyphs = Vec::new();
         let mut new_images = Vec::new();
+        let mut new_keys: Vec<crate::atlas::cache::GlyphCacheKey> = Vec::new();
         if let Some(block) = self.flow_layout.blocks.get(&block_id) {
             let mut tmp = RenderFrame::new();
             crate::render::frame::render_block_at_offset(
@@ -610,6 +621,7 @@ impl DocumentFlow {
                 self.text_color,
                 scale_factor,
                 &mut tmp,
+                &mut new_keys,
             );
             new_glyphs = tmp.glyphs;
             new_images = tmp.images;
@@ -655,6 +667,14 @@ impl DocumentFlow {
         {
             entry.1 = new_decos;
         }
+        if let Some(entry) = self
+            .render_frame
+            .block_glyph_keys
+            .iter_mut()
+            .find(|(id, _)| *id == block_id)
+        {
+            entry.1 = new_keys;
+        }
 
         self.rebuild_flat_frame(service);
         apply_zoom(&mut self.render_frame, self.zoom);
@@ -674,6 +694,23 @@ impl DocumentFlow {
         {
             return self.render(service);
         }
+
+        // Defensive: if any atlas eviction has happened since the last
+        // full render, our cached glyph quads' atlas coordinates may
+        // refer to slots reallocated for unrelated glyphs. Fall back
+        // to a fresh render rather than painting garbled text.
+        if service.eviction_epoch != self.render_frame.atlas_eviction_epoch {
+            return self.render(service);
+        }
+
+        // Keep cached glyphs alive in the shared atlas. Cursor blinks
+        // and selection-only changes paint the cached `render_frame.glyphs`
+        // without ever calling `cache.get`, so the LRU sees those
+        // glyphs as idle and ages them out under sustained activity
+        // in *other* widgets sharing the atlas. Touching here closes
+        // that gap so the eviction fallback above stays a safety net
+        // rather than a hot path.
+        service.touch_glyphs(&self.render_frame.glyph_keys);
 
         self.render_frame.decorations.retain(|d| {
             !matches!(
@@ -703,6 +740,7 @@ impl DocumentFlow {
         self.render_frame.glyphs.clear();
         self.render_frame.images.clear();
         self.render_frame.decorations.clear();
+        self.render_frame.glyph_keys.clear();
         for (_, glyphs) in &self.render_frame.block_glyphs {
             self.render_frame.glyphs.extend_from_slice(glyphs);
         }
@@ -712,6 +750,16 @@ impl DocumentFlow {
         for (_, decos) in &self.render_frame.block_decorations {
             self.render_frame.decorations.extend_from_slice(decos);
         }
+        for (_, keys) in &self.render_frame.block_glyph_keys {
+            self.render_frame.glyph_keys.extend_from_slice(keys);
+        }
+        // Keep the cached glyphs alive in the shared atlas. Without
+        // this, blocks that are still visible through cached quads
+        // but never re-rasterized this frame would age out under the
+        // 120-generation LRU and have their atlas slots reallocated
+        // to unrelated glyphs — corrupting every paint that reuses
+        // these quads (the editor-and-viewer-mangled-together bug).
+        service.touch_glyphs(&self.render_frame.glyph_keys);
 
         for item in &self.flow_layout.flow_order {
             match item {

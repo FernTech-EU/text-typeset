@@ -106,6 +106,15 @@ pub struct TextFontService {
     /// actually changes the value. `DocumentFlow` snapshots this on
     /// layout and exposes a dirty check for callers.
     pub(crate) scale_generation: u64,
+    /// Monotonic counter bumped every time the atlas loses entries
+    /// (LRU eviction or full reset on scale-factor change). Per-widget
+    /// `DocumentFlow`s stamp this on every full `render()` and refuse
+    /// to reuse their cached glyph quads (cursor-only / block-only
+    /// paint paths) when the service's current epoch differs — at
+    /// that point any baked-in atlas pixel coordinates in those
+    /// cached quads may reference slots now owned by unrelated
+    /// glyphs.
+    pub(crate) eviction_epoch: u64,
 }
 
 impl TextFontService {
@@ -124,6 +133,7 @@ impl TextFontService {
             scale_context: swash::scale::ScaleContext::new(),
             scale_factor: 1.0,
             scale_generation: 0,
+            eviction_epoch: 0,
         }
     }
 
@@ -321,6 +331,9 @@ impl TextFontService {
         // Bump the generation so per-widget flows can detect the
         // invalidation and re-run their layouts.
         self.scale_generation = self.scale_generation.wrapping_add(1);
+        // Wholesale atlas reset — anything keyed on the old eviction
+        // epoch must refuse to reuse cached atlas coordinates.
+        self.eviction_epoch = self.eviction_epoch.wrapping_add(1);
     }
 
     /// The current scale factor (default `1.0`).
@@ -336,6 +349,23 @@ impl TextFontService {
     /// change without having to track the transition itself.
     pub fn scale_generation(&self) -> u64 {
         self.scale_generation
+    }
+
+    /// Monotonic counter bumped every time the atlas drops entries —
+    /// LRU eviction triggered by [`atlas_snapshot`](Self::atlas_snapshot)
+    /// or wholesale reset by
+    /// [`set_scale_factor`](Self::set_scale_factor).
+    ///
+    /// Per-widget [`DocumentFlow`]s stamp this value on every full
+    /// [`render`](crate::DocumentFlow::render) and refuse to reuse
+    /// their cached glyph quads on subsequent
+    /// [`render_cursor_only`](crate::DocumentFlow::render_cursor_only)
+    /// or [`render_block_only`](crate::DocumentFlow::render_block_only)
+    /// calls when the epoch has advanced — at that point any baked-in
+    /// atlas pixel coordinates in those cached quads may reference
+    /// slots now owned by unrelated glyphs.
+    pub fn eviction_epoch(&self) -> u64 {
+        self.eviction_epoch
     }
 
     // ── Atlas ───────────────────────────────────────────────────
@@ -363,6 +393,9 @@ impl TextFontService {
             self.glyph_cache.advance_generation();
             let evicted = self.glyph_cache.evict_unused();
             glyphs_evicted = !evicted.is_empty();
+            if glyphs_evicted {
+                self.eviction_epoch = self.eviction_epoch.wrapping_add(1);
+            }
             for alloc_id in evicted {
                 self.atlas.deallocate(alloc_id);
             }

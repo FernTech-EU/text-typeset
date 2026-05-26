@@ -54,20 +54,27 @@ pub fn rasterize_glyph(
     // the alpha path (→ blit_mask, 1 bpp). If a future swash upgrade or
     // an unexpected `Content::SubpixelMask` (3 bpp) ever broke that
     // invariant, the blit would silently read past the data buffer and
-    // splatter neighbor glyph pixels across the atlas. Trip loudly in
-    // debug so we catch it in tests instead of shipping garbled text.
-    debug_assert_eq!(
-        image.data.len(),
-        (image.placement.width * image.placement.height) as usize * if is_color { 4 } else { 1 },
-        "swash image data length {} disagrees with Content {:?} for {}x{} glyph \
-         (expected {} bytes); dispatching this buffer through blit_{} would corrupt the atlas",
-        image.data.len(),
-        image.content,
-        image.placement.width,
-        image.placement.height,
-        (image.placement.width * image.placement.height) as usize * if is_color { 4 } else { 1 },
-        if is_color { "rgba" } else { "mask" },
-    );
+    // splatter neighbor glyph pixels across the atlas — refuse to
+    // rasterize rather than corrupting the atlas. The missing glyph
+    // renders as `.notdef`, which is *visibly* wrong instead of
+    // silently scrambling neighboring glyphs everywhere they're sampled.
+    let bytes_per_pixel = if is_color { 4 } else { 1 };
+    let expected_len =
+        (image.placement.width * image.placement.height) as usize * bytes_per_pixel;
+    if image.data.len() != expected_len {
+        debug_assert!(
+            false,
+            "swash image data length {} disagrees with Content {:?} for {}x{} glyph \
+             (expected {} bytes); blit_{} would corrupt the atlas — returning None",
+            image.data.len(),
+            image.content,
+            image.placement.width,
+            image.placement.height,
+            expected_len,
+            if is_color { "rgba" } else { "mask" },
+        );
+        return None;
+    }
 
     Some(GlyphImage {
         width: image.placement.width,
