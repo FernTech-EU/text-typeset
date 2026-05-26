@@ -23,7 +23,6 @@ fontdb = "0.23.0"
 etagere = "0.3"
 unicode-linebreak = "0.1"
 unicode-bidi = "0.3"
-anyhow = "1.0"
 thiserror = "2.0"
 text-document = { path = "../text-document/crates/public_api", version = "1.5.6", optional = true }
 
