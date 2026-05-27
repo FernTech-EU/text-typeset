@@ -108,9 +108,8 @@ pub fn layout_frame(
         Table(&'a TableLayoutParams),
         Frame(&'a FrameLayoutParams),
     }
-    let mut ordered: Vec<(usize, FlowItem)> = Vec::with_capacity(
-        params.blocks.len() + params.tables.len() + params.frames.len(),
-    );
+    let mut ordered: Vec<(usize, FlowItem)> =
+        Vec::with_capacity(params.blocks.len() + params.tables.len() + params.frames.len());
     for (idx, b) in &params.blocks {
         ordered.push((*idx, FlowItem::Block(b)));
     }
@@ -130,23 +129,20 @@ pub fn layout_frame(
     for (_flow_idx, item) in &ordered {
         match item {
             FlowItem::Block(block_params) => {
-                let mut block =
-                    layout_block(registry, block_params, content_width, scale_factor);
+                let mut block = layout_block(registry, block_params, content_width, scale_factor);
                 block.y = content_y + block.top_margin;
                 let block_content = block.height - block.top_margin - block.bottom_margin;
                 content_y = block.y + block_content + block.bottom_margin;
                 blocks.push(block);
             }
             FlowItem::Table(table_params) => {
-                let mut table =
-                    layout_table(registry, table_params, content_width, scale_factor);
+                let mut table = layout_table(registry, table_params, content_width, scale_factor);
                 table.y = content_y;
                 content_y += table.total_height;
                 tables.push(table);
             }
             FlowItem::Frame(frame_params) => {
-                let mut nested =
-                    layout_frame(registry, frame_params, content_width, scale_factor);
+                let mut nested = layout_frame(registry, frame_params, content_width, scale_factor);
                 nested.y = content_y;
                 nested.x = 0.0;
                 content_y += nested.total_height;
