@@ -924,7 +924,7 @@ fn relayout_frame_block_updates_frame_height() {
         padding: 4.0,
         border_width: 1.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block_at(200, 7, "Short")],
+        blocks: vec![(0, make_block_at(200, 7, "Short"))],
         tables: vec![],
         frames: vec![],
     });
@@ -961,7 +961,7 @@ fn relayout_block_inside_nested_frame_updates_heights() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::None,
-        blocks: vec![make_block_at(100, 3, "Outer")],
+        blocks: vec![(0, make_block_at(100, 3, "Outer"))],
         tables: vec![],
         frames: vec![(
             1,
@@ -977,7 +977,7 @@ fn relayout_block_inside_nested_frame_updates_heights() {
                 padding: 4.0,
                 border_width: 0.0,
                 border_style: FrameBorderStyle::None,
-                blocks: vec![make_block_at(200, 9, "Short")],
+                blocks: vec![(0, make_block_at(200, 9, "Short"))],
                 tables: vec![],
                 frames: vec![],
             },

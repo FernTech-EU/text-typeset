@@ -613,6 +613,7 @@ pub fn make_table(
 /// FrameLayoutParams with common defaults: Inline, no width/height,
 /// zero margins, padding=4.0, border=1.0, Full border style.
 pub fn make_frame(id: usize, blocks: Vec<BlockLayoutParams>) -> FrameLayoutParams {
+    let indexed_blocks = blocks.into_iter().enumerate().collect();
     FrameLayoutParams {
         frame_id: id,
         position: FramePosition::Inline,
@@ -625,7 +626,7 @@ pub fn make_frame(id: usize, blocks: Vec<BlockLayoutParams>) -> FrameLayoutParam
         padding: 4.0,
         border_width: 1.0,
         border_style: FrameBorderStyle::Full,
-        blocks,
+        blocks: indexed_blocks,
         tables: vec![],
         frames: vec![],
     }

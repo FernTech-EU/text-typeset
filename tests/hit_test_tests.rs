@@ -729,7 +729,7 @@ fn selection_highlights_text_inside_frame() {
         padding: 4.0,
         border_width: 1.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block_at(200, 3, "World")],
+        blocks: vec![(0, make_block_at(200, 3, "World"))],
         tables: vec![],
         frames: vec![],
     });
@@ -908,7 +908,7 @@ fn hit_test_below_frame_content_does_not_stick_to_frame() {
         padding: 8.0,
         border_width: 3.0,
         border_style: FrameBorderStyle::LeftOnly,
-        blocks: vec![make_block_at(100, 3, "CD")],
+        blocks: vec![(0, make_block_at(100, 3, "CD"))],
         tables: vec![],
         frames: vec![],
     });
@@ -948,7 +948,7 @@ fn hit_test_inside_frame_returns_frame_block() {
         padding: 8.0,
         border_width: 3.0,
         border_style: FrameBorderStyle::LeftOnly,
-        blocks: vec![make_block_at(100, 3, "Hello")],
+        blocks: vec![(0, make_block_at(100, 3, "Hello"))],
         tables: vec![],
         frames: vec![],
     });
@@ -990,7 +990,7 @@ fn hit_test_inside_frame_returns_text_region() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::None,
-        blocks: vec![make_block_at(100, 3, "Hello world")],
+        blocks: vec![(0, make_block_at(100, 3, "Hello world"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1024,7 +1024,7 @@ fn caret_rect_inside_frame_has_valid_position() {
         padding: 8.0,
         border_width: 3.0,
         border_style: FrameBorderStyle::LeftOnly,
-        blocks: vec![make_block_at(100, 3, "Hello")],
+        blocks: vec![(0, make_block_at(100, 3, "Hello"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1062,7 +1062,7 @@ fn caret_rect_inside_frame_advances_with_position() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::None,
-        blocks: vec![make_block_at(100, 3, "Hello")],
+        blocks: vec![(0, make_block_at(100, 3, "Hello"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1136,7 +1136,7 @@ fn relayout_frame_block_renders_new_glyphs() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::None,
-        blocks: vec![make_block_at(100, 3, "Hi")],
+        blocks: vec![(0, make_block_at(100, 3, "Hi"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1183,7 +1183,7 @@ fn relayout_frame_block_caret_advances_correctly() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::None,
-        blocks: vec![make_block_at(100, 3, "Hello")],
+        blocks: vec![(0, make_block_at(100, 3, "Hello"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1236,7 +1236,7 @@ fn caret_rect_inside_nested_frame() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::None,
-        blocks: vec![make_block_at(100, 3, "Outer")],
+        blocks: vec![(0, make_block_at(100, 3, "Outer"))],
         tables: vec![],
         frames: vec![(
             1,
@@ -1252,7 +1252,7 @@ fn caret_rect_inside_nested_frame() {
                 padding: 4.0,
                 border_width: 0.0,
                 border_style: FrameBorderStyle::None,
-                blocks: vec![make_block_at(200, 9, "Inner")],
+                blocks: vec![(0, make_block_at(200, 9, "Inner"))],
                 tables: vec![],
                 frames: vec![],
             },
@@ -1291,7 +1291,7 @@ fn hit_test_inside_nested_frame_returns_inner_block() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::None,
-        blocks: vec![make_block_at(100, 3, "Outer")],
+        blocks: vec![(0, make_block_at(100, 3, "Outer"))],
         tables: vec![],
         frames: vec![(
             1,
@@ -1307,7 +1307,7 @@ fn hit_test_inside_nested_frame_returns_inner_block() {
                 padding: 4.0,
                 border_width: 0.0,
                 border_style: FrameBorderStyle::None,
-                blocks: vec![make_block_at(200, 9, "Inner")],
+                blocks: vec![(0, make_block_at(200, 9, "Inner"))],
                 tables: vec![],
                 frames: vec![],
             },
@@ -1350,7 +1350,7 @@ fn selection_inside_nested_frame() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::None,
-        blocks: vec![make_block_at(100, 3, "Outer")],
+        blocks: vec![(0, make_block_at(100, 3, "Outer"))],
         tables: vec![],
         frames: vec![(
             1,
@@ -1366,7 +1366,7 @@ fn selection_inside_nested_frame() {
                 padding: 4.0,
                 border_width: 0.0,
                 border_style: FrameBorderStyle::None,
-                blocks: vec![make_block_at(200, 9, "Inner")],
+                blocks: vec![(0, make_block_at(200, 9, "Inner"))],
                 tables: vec![],
                 frames: vec![],
             },

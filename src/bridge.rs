@@ -640,7 +640,13 @@ pub fn convert_frame_with(frame: &FrameSnapshot, opts: &BridgeOptions) -> FrameL
     for (i, element) in frame.elements.iter().enumerate() {
         match element {
             FlowElementSnapshot::Block(block) => {
-                blocks.push(convert_block_with(block, opts));
+                // Carry the flow index so `layout_frame` can interleave
+                // blocks with sibling tables/frames in document order.
+                // Dropping the index here is the bug that caused
+                // nested-frame content (e.g. a depth-3 blockquote
+                // sitting between two depth-2 blocks) to render in the
+                // wrong visual order.
+                blocks.push((i, convert_block_with(block, opts)));
             }
             FlowElementSnapshot::Table(table) => {
                 tables.push((i, convert_table_with(table, opts)));

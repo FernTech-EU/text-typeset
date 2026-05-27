@@ -1189,7 +1189,7 @@ fn frame_renders_nested_block_glyphs() {
         padding: 8.0,
         border_width: 1.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(9000, "Inside frame")],
+        blocks: vec![(0, make_block(9000, "Inside frame"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1219,7 +1219,7 @@ fn frame_contributes_to_content_height() {
         padding: 8.0,
         border_width: 1.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(9000, "Content")],
+        blocks: vec![(0, make_block(9000, "Content"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1249,7 +1249,7 @@ fn block_then_frame_renders_frame_below() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(9000, "Below")],
+        blocks: vec![(0, make_block(9000, "Below"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1282,7 +1282,7 @@ fn frame_with_border_produces_decorations() {
         padding: 4.0,
         border_width: 2.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(9000, "Bordered")],
+        blocks: vec![(0, make_block(9000, "Bordered"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1316,7 +1316,7 @@ fn float_right_frame_positioned_at_right_edge() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(9000, "Right")],
+        blocks: vec![(0, make_block(9000, "Right"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1354,7 +1354,7 @@ fn absolute_frame_does_not_affect_content_height() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(9000, "Floating")],
+        blocks: vec![(0, make_block(9000, "Floating"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1470,7 +1470,7 @@ fn underline_inside_frame_produces_decoration() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![BlockLayoutParams {
+        blocks: vec![(0, BlockLayoutParams {
             block_id: 2,
             position: 0,
             text: "underlined".to_string(),
@@ -1512,7 +1512,7 @@ fn underline_inside_frame_produces_decoration() {
             non_breakable_lines: false,
             checkbox: None,
             background_color: None,
-        }],
+        })],
         tables: vec![],
         frames: vec![],
     });
@@ -1697,7 +1697,7 @@ fn float_left_frame_renders() {
         padding: 4.0,
         border_width: 0.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(9000, "FloatL")],
+        blocks: vec![(0, make_block(9000, "FloatL"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1836,7 +1836,7 @@ fn frame_with_nested_table_renders() {
         padding: 4.0,
         border_width: 1.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(9000, "Before table")],
+        blocks: vec![(0, make_block(9000, "Before table"))],
         tables: vec![(
             1,
             TableLayoutParams {
@@ -1919,7 +1919,7 @@ fn render_block_only_preserves_frame_decorations() {
         padding: 8.0,
         border_width: 3.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(2, "Frame content")],
+        blocks: vec![(0, make_block(2, "Frame content"))],
         tables: vec![],
         frames: vec![],
     });
@@ -1967,7 +1967,7 @@ fn render_block_only_preserves_frame_glyphs() {
         padding: 8.0,
         border_width: 3.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(2, "Frame content")],
+        blocks: vec![(0, make_block(2, "Frame content"))],
         tables: vec![],
         frames: vec![],
     });
@@ -2039,7 +2039,7 @@ fn nested_frame_renders_inner_content() {
         padding: 8.0,
         border_width: 3.0,
         border_style: FrameBorderStyle::LeftOnly,
-        blocks: vec![make_block(10, "Outer frame text")],
+        blocks: vec![(0, make_block(10, "Outer frame text"))],
         tables: vec![],
         frames: vec![(
             1,
@@ -2055,7 +2055,7 @@ fn nested_frame_renders_inner_content() {
                 padding: 8.0,
                 border_width: 3.0,
                 border_style: FrameBorderStyle::LeftOnly,
-                blocks: vec![make_block(20, "Inner frame text")],
+                blocks: vec![(0, make_block(20, "Inner frame text"))],
                 tables: vec![],
                 frames: vec![],
             },
@@ -2099,7 +2099,7 @@ fn nested_frame_contributes_to_content_height() {
         padding: 4.0,
         border_width: 1.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(10, "Outer")],
+        blocks: vec![(0, make_block(10, "Outer"))],
         tables: vec![],
         frames: vec![(
             1,
@@ -2115,7 +2115,7 @@ fn nested_frame_contributes_to_content_height() {
                 padding: 4.0,
                 border_width: 1.0,
                 border_style: FrameBorderStyle::Full,
-                blocks: vec![make_block(20, "Inner")],
+                blocks: vec![(0, make_block(20, "Inner"))],
                 tables: vec![],
                 frames: vec![],
             },
@@ -2139,7 +2139,7 @@ fn nested_frame_contributes_to_content_height() {
         padding: 4.0,
         border_width: 1.0,
         border_style: FrameBorderStyle::Full,
-        blocks: vec![make_block(10, "Outer")],
+        blocks: vec![(0, make_block(10, "Outer"))],
         tables: vec![],
         frames: vec![],
     });
