@@ -2,8 +2,8 @@
 name = "text-typeset"
 version = "1.4.5"
 authors = ["Cyril Jacquet <cyril.jacquet@ferntech.eu>"]
-homepage = "https://github.com/jacquetc/text-typeset"
-repository = "https://github.com/jacquetc/text-typeset"
+homepage = "https://github.com/ferntech-eu/text-typeset"
+repository = "https://github.com/ferntech-eu/text-typeset"
 documentation = "https://docs.rs/text-typeset/"
 description = "Turns rich text documents into GPU-ready glyph quads"
 keywords = ["text", "document", "format"]

@@ -1,14 +1,14 @@
 [![crates.io](https://img.shields.io/crates/v/text-typeset?style=flat-square&logo=rust)](https://crates.io/crates/text-typeset)
 [![API](https://docs.rs/text-typeset/badge.svg)](https://docs.rs/text-typeset)
-![quality](https://img.shields.io/github/actions/workflow/status/jacquetc/text-typeset/ci.yml)
-[![codecov](https://codecov.io/gh/jacquetc/text-typeset/branch/main/graph/badge.svg?token=AONY49DQM0)](https://codecov.io/gh/jacquetc/text-typeset)
+![quality](https://img.shields.io/github/actions/workflow/status/ferntech-eu/text-typeset/ci.yml)
+[![codecov](https://codecov.io/gh/FernTech-EU/text-typeset/graph/badge.svg?token=AONY49DQM0)](https://codecov.io/gh/FernTech-EU/text-typeset)
 [![license](https://img.shields.io/badge/license-MPL--2.0-blue?style=flat-square)](#license)
 
 # text-typeset
 
 Turns rich text documents into GPU-ready glyph quads.
 
-Typesetting crate for the [text-document](https://github.com/jacquetc/text-document) ecosystem. Takes a rich text document model (styled paragraphs, tables, lists, frames) and produces positioned glyph quads, decoration rectangles, and a glyph atlas texture that any GPU framework can render in a few draw calls.
+Typesetting crate for the [text-document](https://github.com/ferntech-eu/text-document) ecosystem. Takes a rich text document model (styled paragraphs, tables, lists, frames) and produces positioned glyph quads, decoration rectangles, and a glyph atlas texture that any GPU framework can render in a few draw calls.
 
 ```text
 text-document (model) --> text-typeset (shaping + layout) --> framework adapter (rendering)
