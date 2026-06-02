@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use crate::shaping::run::ShapedRun;
+use crate::shaping::shaper::TextDirection;
 
 #[derive(Clone)]
 pub struct LayoutLine {
@@ -19,34 +20,83 @@ pub struct LayoutLine {
 }
 
 impl LayoutLine {
-    /// Find the x coordinate for a char offset within this line.
+    /// End (exclusive) of the cluster starting at char offset `cluster`:
+    /// the smallest distinct glyph cluster in the line strictly greater
+    /// than `cluster`, or the line's `char_range.end` if none is larger.
     ///
-    /// Walks runs and glyphs, returning the x position of the first glyph
-    /// whose cluster >= `offset`. Falls back to the end of the line.
-    pub fn x_for_offset(&self, offset: usize) -> f32 {
-        for (i, run) in self.runs.iter().enumerate() {
-            let mut glyph_x = run.x;
-            for glyph in &run.shaped_run.glyphs {
-                if glyph.cluster as usize >= offset {
-                    return glyph_x;
+    /// Clusters across the whole line are the complete set of logical
+    /// char-offset boundaries, so the next-larger one is exactly where
+    /// `cluster`'s char span ends — true for LTR, RTL, and multi-char
+    /// (ligature) clusters alike.
+    pub(crate) fn cluster_end(&self, cluster: usize) -> usize {
+        let mut best: Option<usize> = None;
+        for run in &self.runs {
+            for g in &run.shaped_run.glyphs {
+                let c = g.cluster as usize;
+                if c > cluster {
+                    best = Some(best.map_or(c, |b| b.min(c)));
                 }
-                glyph_x += glyph.x_advance;
-            }
-            // Only return from this run if the offset doesn't belong to a later run
-            let next_run_start = self
-                .runs
-                .get(i + 1)
-                .and_then(|r| r.shaped_run.glyphs.first())
-                .map(|g| g.cluster as usize);
-            match next_run_start {
-                Some(next_start) if offset >= next_start => continue,
-                _ => return glyph_x,
             }
         }
-        self.runs
-            .last()
-            .map(|r| r.x + r.shaped_run.advance_width)
+        best.unwrap_or(self.char_range.end)
+    }
+
+    /// Find the x coordinate for a char offset within this line.
+    ///
+    /// Builds the line's caret stops `(logical_offset, x)` in visual
+    /// order — direction-aware, so an RTL run's caret for its lowest
+    /// offset sits at its rightmost edge — then returns the x of the stop
+    /// matching `offset` (nearest by offset if there's no exact match).
+    pub fn x_for_offset(&self, offset: usize) -> f32 {
+        let stops = self.caret_stops();
+        if stops.is_empty() {
+            return 0.0;
+        }
+        // Exact match first (earliest/leftmost stop wins on ties).
+        if let Some((_, x)) = stops.iter().find(|(o, _)| *o == offset) {
+            return *x;
+        }
+        // No exact stop (e.g. offset inside a multi-char cluster): snap to
+        // the nearest stop by logical distance.
+        stops
+            .iter()
+            .min_by_key(|(o, _)| o.abs_diff(offset))
+            .map(|(_, x)| *x)
             .unwrap_or(0.0)
+    }
+
+    /// Caret stops `(logical char offset, x)` across the line in visual
+    /// (left-to-right) order. For an LTR run each glyph contributes a stop
+    /// at its left edge (the glyph's own cluster) plus a trailing stop at
+    /// the run's right edge; for an RTL run the leftmost edge is the
+    /// trailing (highest) offset and each glyph's right edge is its own
+    /// (leading) offset.
+    fn caret_stops(&self) -> Vec<(usize, f32)> {
+        let mut stops: Vec<(usize, f32)> = Vec::new();
+        for run in &self.runs {
+            let glyphs = &run.shaped_run.glyphs;
+            if glyphs.is_empty() {
+                continue;
+            }
+            let mut gx = run.x;
+            if run.shaped_run.direction == TextDirection::RightToLeft {
+                // Leftmost edge: caret after the last logical char in the run.
+                stops.push((self.cluster_end(glyphs[0].cluster as usize), gx));
+                for g in glyphs {
+                    gx += g.x_advance;
+                    stops.push((g.cluster as usize, gx));
+                }
+            } else {
+                for g in glyphs {
+                    stops.push((g.cluster as usize, gx));
+                    gx += g.x_advance;
+                }
+                // Rightmost edge: caret after the last logical char in the run.
+                let last = glyphs.last().map(|g| g.cluster as usize).unwrap_or(0);
+                stops.push((self.cluster_end(last), gx));
+            }
+        }
+        stops
     }
 }
 

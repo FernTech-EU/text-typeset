@@ -158,6 +158,7 @@ pub fn layout_block(
                 glyphs: vec![image_glyph],
                 advance_width: frag.image_width,
                 text_range: frag.offset..frag.offset + frag.text.len(),
+                direction: TextDirection::LeftToRight,
                 underline_style: frag.underline_style,
                 overline: false,
                 strikeout: false,

@@ -195,6 +195,14 @@ pub fn shape_text_directed(
         TextDirection::Auto => buffer.guess_segment_properties(),
     }
 
+    // Resolve the concrete direction (Auto is now decided by the buffer).
+    // Stored on the run so hit-testing knows RTL glyph order.
+    let resolved_direction = if buffer.direction() == Direction::RightToLeft {
+        TextDirection::RightToLeft
+    } else {
+        TextDirection::LeftToRight
+    };
+
     // ShaperData preprocesses font tables for shaping. It's built once
     // per face and cached on the FontEntry, so repeated shape calls
     // (every relayout/keystroke) reuse the same preprocessed tables.
@@ -234,6 +242,7 @@ pub fn shape_text_directed(
         glyphs,
         advance_width: total_advance,
         text_range: text_offset..text_offset + text.len(),
+        direction: resolved_direction,
         underline_style: crate::types::UnderlineStyle::None,
         overline: false,
         strikeout: false,
@@ -276,6 +285,12 @@ pub fn shape_text_with_buffer(
     // guess them so harfrust doesn't panic on Direction::Invalid.
     buffer.guess_segment_properties();
 
+    let resolved_direction = if buffer.direction() == Direction::RightToLeft {
+        TextDirection::RightToLeft
+    } else {
+        TextDirection::LeftToRight
+    };
+
     let shaper_data = entry.shaper_data(&font);
     let shaper = shaper_data.shaper(&font).build();
     let glyph_buffer = shaper.shape(buffer, features);
@@ -312,6 +327,7 @@ pub fn shape_text_with_buffer(
         glyphs,
         advance_width: total_advance,
         text_range: text_offset..text_offset + text.len(),
+        direction: resolved_direction,
         underline_style: crate::types::UnderlineStyle::None,
         overline: false,
         strikeout: false,

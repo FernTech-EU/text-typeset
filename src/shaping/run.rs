@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use crate::shaping::shaper::TextDirection;
 use crate::types::FontFaceId;
 
 #[derive(Clone)]
@@ -26,6 +27,11 @@ pub struct ShapedRun {
     pub glyphs: Vec<ShapedGlyph>,
     pub advance_width: f32,
     pub text_range: Range<usize>,
+    /// Resolved visual direction of this run. Glyphs are stored in visual
+    /// (left-to-right) order, so for an RTL run their `cluster` byte
+    /// offsets descend across the array. Hit-testing and caret placement
+    /// need this to map between visual x and logical offset correctly.
+    pub direction: TextDirection,
     /// Decoration flags from the source fragment's TextFormat.
     pub underline_style: crate::types::UnderlineStyle,
     pub overline: bool,

@@ -404,26 +404,31 @@ fn build_line(
     // Compute char range from cluster values.
     // Clusters from rustybuzz are byte offsets — convert to char offsets
     // so that positions match text-document's character-based coordinates.
-    let byte_start = if start < flat.len() {
-        flat[start].cluster as usize
+    //
+    // Glyphs are in *visual* order, so for an RTL run `flat[start]` holds
+    // the largest cluster and `flat[end-1]` the smallest. Take the min/max
+    // over the line's glyphs instead of trusting the array ends, so the
+    // logical range is correct for both directions.
+    let byte_start = flat[start..end.min(flat.len())]
+        .iter()
+        .map(|g| g.cluster as usize)
+        .min()
+        .unwrap_or(0);
+    let byte_end = if end >= flat.len() {
+        // Last glyph reaches the end of the input text. Always snap to the
+        // full length: a trailing ligature glyph may cover several source
+        // chars, so `max_cluster + 1` would be wrong.
+        text.len()
     } else {
-        0
-    };
-    let byte_end = if end > 0 && end <= flat.len() {
-        if end < flat.len() {
-            flat[end].cluster as usize
-        } else {
-            // Last glyph reaches the end of the input text. Using
-            // `flat[end-1].cluster + 1 char` is wrong when the last
-            // glyph is a ligature covering multiple source chars
-            // (e.g. "fi" shaped as a single glyph whose cluster=0
-            // but represents "fi", so the end is at text.len()=2,
-            // not cluster+1=1). Always snap to the full text length
-            // for the end-of-input case.
-            text.len()
-        }
-    } else {
-        byte_start
+        // Next visual glyph's cluster bounds an LTR line exactly; for a
+        // wrapped RTL line take whichever is larger so the logical end
+        // still covers the line's highest cluster.
+        let line_max = flat[start..end]
+            .iter()
+            .map(|g| g.cluster as usize)
+            .max()
+            .unwrap_or(0);
+        (flat[end].cluster as usize).max(line_max)
     };
     let char_start = byte_offset_to_char_offset(text, byte_start);
     let char_end = byte_offset_to_char_offset(text, byte_end);
@@ -477,6 +482,7 @@ fn extract_sub_run(
         glyphs: sub_glyphs,
         advance_width: advance,
         text_range: run.text_range.clone(),
+        direction: run.direction,
         underline_style: run.underline_style,
         overline: run.overline,
         strikeout: run.strikeout,

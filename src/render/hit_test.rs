@@ -1,4 +1,5 @@
 use crate::layout::flow::{FlowItem, FlowLayout};
+use crate::shaping::shaper::TextDirection;
 use crate::types::{CursorAffinity, HitRegion, HitTestResult};
 
 /// Map a screen-space point to a document position.
@@ -794,13 +795,26 @@ fn find_position_in_line(line: &LayoutLine, local_x: f32) -> (usize, HitRegion, 
             continue;
         }
 
+        // Glyphs are stored in visual order. For an RTL run the cluster
+        // values descend across the array, and a glyph's leading
+        // (lower-offset) caret edge is on its RIGHT, trailing on its LEFT
+        // — the mirror of LTR. Pick the logical offset accordingly.
+        let rtl = run.shaped_run.direction == TextDirection::RightToLeft;
         let mut glyph_x = run.x;
 
         for glyph in &run.shaped_run.glyphs {
-            let glyph_mid = glyph_x + glyph.x_advance / 2.0;
+            let next_x = glyph_x + glyph.x_advance;
 
-            if local_x < glyph_mid {
-                let offset = glyph.cluster as usize;
+            if local_x < next_x {
+                let cluster = glyph.cluster as usize;
+                let in_left_half = local_x < glyph_x + glyph.x_advance / 2.0;
+                let offset = if rtl == in_left_half {
+                    // RTL left-half or LTR right-half → trailing edge.
+                    line.cluster_end(cluster)
+                } else {
+                    // RTL right-half or LTR left-half → this cluster.
+                    cluster
+                };
                 let tooltip = run.decorations.tooltip.clone();
                 if run.decorations.is_link {
                     return (
@@ -814,10 +828,27 @@ fn find_position_in_line(line: &LayoutLine, local_x: f32) -> (usize, HitRegion, 
                 return (offset, HitRegion::Text, tooltip);
             }
 
-            glyph_x += glyph.x_advance;
+            glyph_x = next_x;
         }
     }
 
-    // Past end of line
+    // Past the right edge of every glyph. For an LTR line that's the
+    // logical end; for a line whose rightmost (last visual) run is RTL it
+    // is that run's logical *start* — its rightmost glyph's cluster.
+    if let Some(last) = line
+        .runs
+        .iter()
+        .rev()
+        .find(|r| !r.shaped_run.glyphs.is_empty())
+        && last.shaped_run.direction == TextDirection::RightToLeft
+    {
+        let offset = last
+            .shaped_run
+            .glyphs
+            .last()
+            .map(|g| g.cluster as usize)
+            .unwrap_or(line.char_range.end);
+        return (offset, HitRegion::PastLineEnd, None);
+    }
     (line.char_range.end, HitRegion::PastLineEnd, None)
 }
