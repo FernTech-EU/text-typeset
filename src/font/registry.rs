@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -13,11 +15,32 @@ use crate::types::FontFaceId;
 /// shared with the database.
 pub type SharedFontData = Arc<dyn AsRef<[u8]> + Sync + Send>;
 
+/// Backing bytes for a [`FontEntry`].
+///
+/// Explicitly registered fonts are [`Resident`](FontData::Resident) — the
+/// caller handed us the bytes. System fonts discovered by
+/// [`load_system_fonts`](FontRegistry::new) are [`Lazy`](FontData::Lazy):
+/// we keep only the file path until the face is actually shaped or queried
+/// for coverage, then read and cache it. This keeps `new()` cheap even
+/// when the OS has hundreds of installed faces.
+enum FontData {
+    Resident(SharedFontData),
+    Lazy {
+        path: PathBuf,
+        cell: OnceLock<SharedFontData>,
+    },
+}
+
 pub struct FontEntry {
     pub fontdb_id: fontdb::ID,
     pub face_index: u32,
-    pub data: SharedFontData,
+    data: FontData,
     pub swash_cache_key: swash::CacheKey,
+    /// True for faces discovered via the OS font enumeration. Glyph
+    /// fallback prefers explicitly-registered faces and only reaches for
+    /// system faces as a last resort (see
+    /// [`find_fallback_font`](crate::font::resolve::find_fallback_font)).
+    pub is_system: bool,
     /// Lazily-built HarfBuzz shaping tables for this face. `ShaperData`
     /// preprocesses the font's GSUB/GPOS/cmap tables and is independent
     /// of any `FontRef` lifetime, so it can be built once and reused
@@ -28,10 +51,22 @@ pub struct FontEntry {
 }
 
 impl FontEntry {
-    /// Borrow the underlying font bytes. Two `as_ref()` hops:
-    /// `Arc<dyn AsRef<[u8]>>` → `&(dyn AsRef<[u8]>)` → `&[u8]`.
+    /// Borrow the underlying font bytes, loading them from disk on first
+    /// use for lazily-tracked system faces. Returns an empty slice if a
+    /// system font file can no longer be read (uninstalled mid-session);
+    /// shaping then degrades gracefully to `None`/`.notdef`.
     pub fn bytes(&self) -> &[u8] {
-        (*self.data).as_ref()
+        match &self.data {
+            // Two `as_ref()` hops: Arc<dyn AsRef<[u8]>> → dyn → &[u8].
+            FontData::Resident(data) => (**data).as_ref(),
+            FontData::Lazy { path, cell } => {
+                let arc = cell.get_or_init(|| {
+                    let bytes = std::fs::read(path).unwrap_or_default();
+                    Arc::new(bytes) as SharedFontData
+                });
+                (**arc).as_ref()
+            }
+        }
     }
 
     /// Borrow this face's shaping tables, building them on first use.
@@ -48,7 +83,10 @@ impl FontEntry {
 pub struct FontRegistry {
     fontdb: Database,
     fonts: Vec<Option<FontEntry>>,
-    generic_families: std::collections::HashMap<String, String>,
+    /// fontdb face ID → our `FontFaceId`, so `query_font` doesn't scan
+    /// `fonts` linearly (it can hold hundreds of system faces).
+    fontdb_index: HashMap<fontdb::ID, FontFaceId>,
+    generic_families: HashMap<String, String>,
     default_font: Option<FontFaceId>,
     default_size_px: f32,
 }
@@ -60,13 +98,70 @@ impl Default for FontRegistry {
 }
 
 impl FontRegistry {
+    /// Create a registry pre-populated with the operating system's fonts.
+    ///
+    /// OS faces participate in family lookup and glyph fallback so that
+    /// arbitrary documents (CJK, emoji, scripts the host didn't bundle)
+    /// still render. Their bytes load lazily on first use, but the
+    /// enumeration itself scans the OS font directories — a one-time
+    /// startup cost. Use [`new_without_system_fonts`](Self::new_without_system_fonts)
+    /// when the host ships a controlled font set and wants neither the
+    /// scan nor implicit OS fonts.
     pub fn new() -> Self {
+        let mut registry = Self::new_without_system_fonts();
+        registry.load_system_fonts();
+        registry
+    }
+
+    /// Create an empty registry with no system fonts. Fonts enter only
+    /// via the `register_font*` methods.
+    pub fn new_without_system_fonts() -> Self {
         Self {
             fontdb: Database::new(),
             fonts: Vec::new(),
-            generic_families: std::collections::HashMap::new(),
+            fontdb_index: HashMap::new(),
+            generic_families: HashMap::new(),
             default_font: None,
             default_size_px: 16.0,
+        }
+    }
+
+    /// Enumerate OS fonts into `fontdb` and register a lazy [`FontEntry`]
+    /// for each so they join family lookup and the fallback chain. Bytes
+    /// load on first access; only the file path is kept until then.
+    fn load_system_fonts(&mut self) {
+        self.fontdb.load_system_fonts();
+
+        // Collect first: `faces()` borrows `self.fontdb` immutably while
+        // the loop needs `&mut self` to push entries.
+        let discovered: Vec<(fontdb::ID, u32, PathBuf)> = self
+            .fontdb
+            .faces()
+            .filter_map(|f| match &f.source {
+                Source::File(path) => Some((f.id, f.index, path.clone())),
+                Source::SharedFile(path, _) => Some((f.id, f.index, path.clone())),
+                Source::Binary(_) => None,
+            })
+            .collect();
+
+        for (fontdb_id, face_index, path) in discovered {
+            if self.fontdb_index.contains_key(&fontdb_id) {
+                continue;
+            }
+            let entry = FontEntry {
+                fontdb_id,
+                face_index,
+                data: FontData::Lazy {
+                    path,
+                    cell: OnceLock::new(),
+                },
+                swash_cache_key: swash::CacheKey::new(),
+                is_system: true,
+                shaper_data: OnceLock::new(),
+            };
+            let face_id = FontFaceId(self.fonts.len() as u32);
+            self.fonts.push(Some(entry));
+            self.fontdb_index.insert(fontdb_id, face_id);
         }
     }
 
@@ -102,13 +197,15 @@ impl FontRegistry {
             let entry = FontEntry {
                 fontdb_id,
                 face_index,
-                data: data.clone(),
+                data: FontData::Resident(data.clone()),
                 swash_cache_key,
+                is_system: false,
                 shaper_data: OnceLock::new(),
             };
 
             let face_id = FontFaceId(self.fonts.len() as u32);
             self.fonts.push(Some(entry));
+            self.fontdb_index.insert(fontdb_id, face_id);
             face_ids.push(face_id);
         }
         face_ids
@@ -155,13 +252,15 @@ impl FontRegistry {
                 let entry = FontEntry {
                     fontdb_id: new_id,
                     face_index,
-                    data: data.clone(),
+                    data: FontData::Resident(data.clone()),
                     swash_cache_key,
+                    is_system: false,
                     shaper_data: OnceLock::new(),
                 };
 
                 let face_id = FontFaceId(self.fonts.len() as u32);
                 self.fonts.push(Some(entry));
+                self.fontdb_index.insert(new_id, face_id);
                 face_ids.push(face_id);
             }
         }
@@ -241,12 +340,7 @@ impl FontRegistry {
 
     /// Find our FontFaceId for a fontdb ID.
     fn fontdb_id_to_face_id(&self, fontdb_id: fontdb::ID) -> Option<FontFaceId> {
-        self.fonts.iter().enumerate().find_map(|(i, entry)| {
-            entry
-                .as_ref()
-                .filter(|e| e.fontdb_id == fontdb_id)
-                .map(|_| FontFaceId(i as u32))
-        })
+        self.fontdb_index.get(&fontdb_id).copied()
     }
 
     /// Iterate all registered font entries for glyph fallback.

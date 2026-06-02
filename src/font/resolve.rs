@@ -99,21 +99,29 @@ pub fn font_has_glyph(registry: &FontRegistry, face_id: FontFaceId, ch: char) ->
 }
 
 /// Find a fallback font that has the given character.
+///
+/// Explicitly-registered faces are tried before OS-discovered ones, so a
+/// host's bundled fallback fonts win over arbitrary system fonts; system
+/// fonts (whose bytes load lazily on this scan) are the last resort.
 pub fn find_fallback_font(
     registry: &FontRegistry,
     ch: char,
     exclude: FontFaceId,
 ) -> Option<FontFaceId> {
-    for (face_id, entry) in registry.all_entries() {
-        if face_id == exclude {
-            continue;
-        }
-        let font_ref = match swash::FontRef::from_index(entry.bytes(), entry.face_index as usize) {
-            Some(f) => f,
-            None => continue,
-        };
-        if font_ref.charmap().map(ch) != 0 {
-            return Some(face_id);
+    let covers = |entry: &crate::font::registry::FontEntry| {
+        swash::FontRef::from_index(entry.bytes(), entry.face_index as usize)
+            .is_some_and(|font_ref| font_ref.charmap().map(ch) != 0)
+    };
+
+    // Pass 1: explicitly-registered faces. Pass 2: system faces.
+    for system_pass in [false, true] {
+        for (face_id, entry) in registry.all_entries() {
+            if face_id == exclude || entry.is_system != system_pass {
+                continue;
+            }
+            if covers(entry) {
+                return Some(face_id);
+            }
         }
     }
     None

@@ -1847,7 +1847,8 @@ mod tests {
     const NOTO_SANS: &[u8] = include_bytes!("../test-fonts/NotoSans-Variable.ttf");
 
     fn service() -> TextFontService {
-        let mut s = TextFontService::new();
+        // Hermetic: don't pull in the host machine's fonts.
+        let mut s = TextFontService::new_without_system_fonts();
         let face = s.register_font(NOTO_SANS);
         s.set_default_font(face, 16.0);
         s

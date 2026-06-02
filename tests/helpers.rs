@@ -275,7 +275,10 @@ pub struct Typesetter {
 impl Typesetter {
     pub fn new() -> Self {
         Self {
-            service: TextFontService::new(),
+            // Hermetic: tests must not depend on the host machine's
+            // installed fonts. System-font behavior is covered explicitly
+            // in system_font_tests.rs.
+            service: TextFontService::new_without_system_fonts(),
             flow: DocumentFlow::new(),
         }
     }
