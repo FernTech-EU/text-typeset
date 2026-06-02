@@ -51,7 +51,9 @@ use crate::layout::inline_markup::{InlineAttrs, InlineMarkup};
 use crate::layout::paragraph::{Alignment, break_into_lines};
 use crate::layout::table::TableLayoutParams;
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
-use crate::shaping::shaper::{bidi_runs, font_metrics_px, shape_text, shape_text_with_fallback};
+use crate::shaping::shaper::{
+    bidi_runs, font_metrics_px, shape_text, shape_text_with_fallback, to_harfrust_features,
+};
 use crate::types::{
     BlockVisualInfo, CharacterGeometry, CursorDisplay, DecorationKind, DecorationRect, GlyphQuad,
     HitTestResult, LaidOutSpan, LaidOutSpanKind, ParagraphResult, RenderFrame, SingleLineResult,
@@ -863,6 +865,7 @@ impl DocumentFlow {
         let line_height = metrics.ascent + metrics.descent + metrics.leading;
         let baseline = metrics.ascent;
 
+        let features = to_harfrust_features(&format.features);
         let runs: Vec<_> = bidi_runs(text)
             .into_iter()
             .filter_map(|br| {
@@ -873,6 +876,7 @@ impl DocumentFlow {
                     slice,
                     br.byte_range.start,
                     br.direction,
+                    &features,
                 )
             })
             .collect();
@@ -1007,6 +1011,7 @@ impl DocumentFlow {
             None => return empty,
         };
 
+        let features = to_harfrust_features(&format.features);
         let runs: Vec<_> = bidi_runs(text)
             .into_iter()
             .filter_map(|br| {
@@ -1017,6 +1022,7 @@ impl DocumentFlow {
                     slice,
                     br.byte_range.start,
                     br.direction,
+                    &features,
                 )
             })
             .collect();
@@ -1286,6 +1292,7 @@ impl DocumentFlow {
             };
 
             let flat_start = span_flat_offsets[span_idx];
+            let features = to_harfrust_features(&fmt.features);
             for br in bidi_runs(&sp.text) {
                 let slice = match sp.text.get(br.byte_range.clone()) {
                     Some(s) => s,
@@ -1297,6 +1304,7 @@ impl DocumentFlow {
                     slice,
                     flat_start + br.byte_range.start,
                     br.direction,
+                    &features,
                 ) else {
                     continue;
                 };
@@ -1874,6 +1882,7 @@ mod tests {
                 image_name: None,
                 image_width: 0.0,
                 image_height: 0.0,
+                features: Vec::new(),
             }],
             alignment: Alignment::Left,
             top_margin: 0.0,

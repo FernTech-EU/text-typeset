@@ -610,6 +610,7 @@ fn hit_test_link_region_detected() {
             image_name: None,
             image_width: 0.0,
             image_height: 0.0,
+            features: Vec::new(),
         }],
         alignment: Alignment::Left,
         top_margin: 0.0,

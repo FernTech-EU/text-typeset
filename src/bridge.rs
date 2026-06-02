@@ -316,6 +316,7 @@ fn convert_fragment(
                 image_name: None,
                 image_width: 0.0,
                 image_height: 0.0,
+                features: Vec::new(),
             }
         }
         FragmentContent::Image {
@@ -349,6 +350,7 @@ fn convert_fragment(
             image_name: Some(name.clone()),
             image_width: *width as f32,
             image_height: *height as f32,
+            features: Vec::new(),
         },
     }
 }

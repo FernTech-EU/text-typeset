@@ -1,6 +1,8 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use fontdb::{Database, Family, Query, Source, Style, Weight};
+use harfrust::{FontRef, ShaperData};
 
 use crate::types::FontFaceId;
 
@@ -16,6 +18,13 @@ pub struct FontEntry {
     pub face_index: u32,
     pub data: SharedFontData,
     pub swash_cache_key: swash::CacheKey,
+    /// Lazily-built HarfBuzz shaping tables for this face. `ShaperData`
+    /// preprocesses the font's GSUB/GPOS/cmap tables and is independent
+    /// of any `FontRef` lifetime, so it can be built once and reused
+    /// across every shape call. Built on first shape via
+    /// [`shaper_data`](Self::shaper_data). `OnceLock` keeps `FontEntry`
+    /// `Sync` (its internal caches are atomic).
+    shaper_data: OnceLock<ShaperData>,
 }
 
 impl FontEntry {
@@ -23,6 +32,16 @@ impl FontEntry {
     /// `Arc<dyn AsRef<[u8]>>` → `&(dyn AsRef<[u8]>)` → `&[u8]`.
     pub fn bytes(&self) -> &[u8] {
         (*self.data).as_ref()
+    }
+
+    /// Borrow this face's shaping tables, building them on first use.
+    ///
+    /// `ShaperData::new` reprocesses the font tables; doing it once per
+    /// face (instead of once per shape call) avoids redundant work on
+    /// every relayout/keystroke. The `font` must refer to this same
+    /// face — callers already hold a `FontRef` opened from `bytes()`.
+    pub fn shaper_data(&self, font: &FontRef) -> &ShaperData {
+        self.shaper_data.get_or_init(|| ShaperData::new(font))
     }
 }
 
@@ -85,6 +104,7 @@ impl FontRegistry {
                 face_index,
                 data: data.clone(),
                 swash_cache_key,
+                shaper_data: OnceLock::new(),
             };
 
             let face_id = FontFaceId(self.fonts.len() as u32);
@@ -137,6 +157,7 @@ impl FontRegistry {
                     face_index,
                     data: data.clone(),
                     swash_cache_key,
+                    shaper_data: OnceLock::new(),
                 };
 
                 let face_id = FontFaceId(self.fonts.len() as u32);

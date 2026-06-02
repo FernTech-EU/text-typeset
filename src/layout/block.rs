@@ -3,7 +3,10 @@ use crate::font::resolve::{ResolvedFont, resolve_font};
 use crate::layout::line::LayoutLine;
 use crate::layout::paragraph::{Alignment, break_into_lines};
 use crate::shaping::run::ShapedRun;
-use crate::shaping::shaper::{FontMetricsPx, font_metrics_px, shape_text};
+use crate::shaping::shaper::{
+    FontMetricsPx, TextDirection, font_metrics_px, shape_text, shape_text_with_fallback,
+    to_harfrust_features,
+};
 
 /// Computed layout for a single block (paragraph).
 #[derive(Clone)]
@@ -113,6 +116,9 @@ pub struct FragmentParams {
     pub image_width: f32,
     /// Image height in pixels. Only meaningful when image_name is Some.
     pub image_height: f32,
+    /// Discretionary OpenType features to toggle during shaping. Empty =
+    /// font defaults. See [`crate::types::FontFeature`].
+    pub features: Vec<crate::types::FontFeature>,
 }
 
 /// Lay out a single block: resolve fonts, shape fragments, break into lines.
@@ -194,7 +200,15 @@ pub fn layout_block(
                 default_metrics = font_metrics_px(registry, &resolved);
             }
 
-            if let Some(mut run) = shape_text(registry, &resolved, &frag.text, frag.offset) {
+            let features = to_harfrust_features(&frag.features);
+            if let Some(mut run) = shape_text_with_fallback(
+                registry,
+                &resolved,
+                &frag.text,
+                frag.offset,
+                TextDirection::Auto,
+                &features,
+            ) {
                 run.underline_style = frag.underline_style;
                 run.overline = frag.overline;
                 run.strikeout = frag.strikeout;

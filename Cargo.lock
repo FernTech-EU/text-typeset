@@ -1542,6 +1542,7 @@ dependencies = [
  "serde_json",
  "text-document-common",
  "text-document-frontend",
+ "thiserror",
  "unicode-segmentation",
 ]
 
@@ -1555,6 +1556,7 @@ dependencies = [
  "flume",
  "im",
  "log",
+ "parking_lot",
  "pulldown-cmark",
  "ropey",
  "scraper",
@@ -1611,6 +1613,7 @@ dependencies = [
  "chrono",
  "flume",
  "log",
+ "parking_lot",
  "text-document-common",
  "text-document-direct-access",
  "text-document-editing",
@@ -1640,6 +1643,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "docx-rs",
+ "parking_lot",
  "regex",
  "serde",
  "serde_json",

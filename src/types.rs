@@ -294,6 +294,42 @@ pub struct BlockVisualInfo {
     pub height: f32,
 }
 
+// ── OpenType features ───────────────────────────────────────────
+
+/// An OpenType feature toggle applied during shaping.
+///
+/// `tag` is the 4-byte feature tag (e.g. `*b"liga"`, `*b"smcp"`,
+/// `*b"tnum"`, `*b"ss01"`); `value` is the feature value — `0` disables
+/// it, `1` enables it, and some features (e.g. `aalt`) take an index.
+///
+/// Script-mandated features (Arabic joining, Indic reordering, etc.)
+/// always apply regardless of this list; these toggles control the
+/// *discretionary* typographic features a caller wants on or off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FontFeature {
+    /// The 4-byte OpenType feature tag.
+    pub tag: [u8; 4],
+    /// Feature value: `0` = off, `1` = on, or a feature-specific index.
+    pub value: u32,
+}
+
+impl FontFeature {
+    /// A feature tag turned on (`value = 1`).
+    pub const fn on(tag: [u8; 4]) -> Self {
+        Self { tag, value: 1 }
+    }
+
+    /// A feature tag turned off (`value = 0`).
+    pub const fn off(tag: [u8; 4]) -> Self {
+        Self { tag, value: 0 }
+    }
+
+    /// A feature tag with an explicit value.
+    pub const fn new(tag: [u8; 4], value: u32) -> Self {
+        Self { tag, value }
+    }
+}
+
 // ── Single-line API ────────────────────────────────────────────
 
 /// Text formatting parameters for the single-line layout API.
@@ -316,6 +352,9 @@ pub struct TextFormat {
     pub font_size: Option<f32>,
     /// Text color (RGBA, 0.0-1.0). None means use the typesetter's text color.
     pub color: Option<[f32; 4]>,
+    /// Discretionary OpenType features to toggle during shaping (ligatures,
+    /// small caps, tabular numerals, stylistic sets, …). Empty = font defaults.
+    pub features: Vec<FontFeature>,
 }
 
 /// Result of [`crate::DocumentFlow::layout_single_line`].
