@@ -16,6 +16,20 @@ use crate::layout::table::{CellLayoutParams, TableLayoutParams};
 const DEFAULT_LIST_INDENT: f32 = 24.0;
 const INDENT_PER_LEVEL: f32 = 24.0;
 
+/// Parse a 2-letter ISO 639-1 code (e.g. "en", "fr") into a lowercased
+/// byte pair for `hypher::Lang::from_iso`. Returns `None` for anything
+/// that isn't two ASCII letters (incl. longer tags like "en-US" — only
+/// the primary subtag matters, so callers may pass that and we take the
+/// first two letters).
+fn iso639_1(code: &str) -> Option<[u8; 2]> {
+    let b = code.trim().as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1].is_ascii_alphabetic() {
+        Some([b[0].to_ascii_lowercase(), b[1].to_ascii_lowercase()])
+    } else {
+        None
+    }
+}
+
 /// Per-call knobs threaded through the conversion functions so that a
 /// host widget can override defaults driven by its active theme.
 ///
@@ -201,9 +215,20 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
         line_height_multiplier: block.block_format.line_height,
         non_breakable_lines: block.block_format.non_breakable_lines.unwrap_or(false)
             || block.block_format.is_code_block == Some(true),
-        // text-document has no hyphenation flag yet; hosts opt in via the
-        // text-typeset BlockLayoutParams directly.
-        hyphenation: None,
+        // Map the document's per-block hyphenation flag + language to the
+        // engine's Hyphenation config. Language defaults to English when
+        // unset or unparseable; unsupported languages degrade to
+        // soft-hyphen-only at wrap time.
+        hyphenation: (block.block_format.hyphenate == Some(true)).then(|| {
+            crate::types::Hyphenation {
+                language: block
+                    .block_format
+                    .language
+                    .as_deref()
+                    .and_then(iso639_1)
+                    .unwrap_or(*b"en"),
+            }
+        }),
         checkbox,
         background_color: block
             .block_format
@@ -704,5 +729,27 @@ pub fn convert_frame_with(frame: &FrameSnapshot, opts: &BridgeOptions) -> FrameL
         blocks,
         tables,
         frames,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iso639_1;
+
+    #[test]
+    fn iso639_1_parses_two_letter_codes_case_insensitively() {
+        assert_eq!(iso639_1("en"), Some(*b"en"));
+        assert_eq!(iso639_1("FR"), Some(*b"fr"));
+        assert_eq!(iso639_1("De"), Some(*b"de"));
+        // Region subtags are ignored — only the primary subtag matters.
+        assert_eq!(iso639_1("en-US"), Some(*b"en"));
+        assert_eq!(iso639_1("  fr  "), Some(*b"fr"));
+    }
+
+    #[test]
+    fn iso639_1_rejects_non_letter_codes() {
+        assert_eq!(iso639_1(""), None);
+        assert_eq!(iso639_1("x"), None);
+        assert_eq!(iso639_1("12"), None);
     }
 }
