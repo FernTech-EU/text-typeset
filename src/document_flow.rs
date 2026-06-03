@@ -48,7 +48,7 @@ use crate::layout::block::BlockLayoutParams;
 use crate::layout::flow::{FlowItem, FlowLayout};
 use crate::layout::frame::FrameLayoutParams;
 use crate::layout::inline_markup::{InlineAttrs, InlineMarkup};
-use crate::layout::paragraph::{Alignment, break_into_lines};
+use crate::layout::paragraph::{Alignment, Hyphenator, break_into_lines};
 use crate::layout::table::TableLayoutParams;
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
 use crate::shaping::shaper::{
@@ -1031,12 +1031,14 @@ impl DocumentFlow {
             return empty;
         }
 
-        let hyphen = if format.hyphenate {
+        let hyphenator = format.hyphenation.and_then(|h| {
             shape_text(&service.font_registry, &resolved, "-", 0)
                 .and_then(|r| r.glyphs.into_iter().next())
-        } else {
-            None
-        };
+                .map(|glyph| Hyphenator {
+                    glyph,
+                    language: h.language,
+                })
+        });
         let lines = break_into_lines(
             runs,
             text,
@@ -1044,7 +1046,7 @@ impl DocumentFlow {
             Alignment::Left,
             0.0,
             &metrics,
-            hyphen,
+            hyphenator,
         );
 
         let line_count = match max_lines {
@@ -1334,12 +1336,14 @@ impl DocumentFlow {
             return empty;
         }
 
-        let hyphen = if format.hyphenate {
+        let hyphenator = format.hyphenation.and_then(|h| {
             shape_text(&service.font_registry, &base_resolved, "-", 0)
                 .and_then(|r| r.glyphs.into_iter().next())
-        } else {
-            None
-        };
+                .map(|glyph| Hyphenator {
+                    glyph,
+                    language: h.language,
+                })
+        });
         let lines = break_into_lines(
             all_runs,
             &flat,
@@ -1347,7 +1351,7 @@ impl DocumentFlow {
             Alignment::Left,
             0.0,
             &metrics,
-            hyphen,
+            hyphenator,
         );
 
         let line_count = match max_lines {
@@ -1924,7 +1928,7 @@ mod tests {
             tab_positions: vec![],
             line_height_multiplier: None,
             non_breakable_lines: false,
-            hyphenate: false,
+            hyphenation: None,
             checkbox: None,
             background_color: None,
         }

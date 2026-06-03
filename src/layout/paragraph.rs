@@ -65,14 +65,16 @@ fn enumerate_breaks(text: &str) -> Vec<(usize, BreakOpportunity)> {
 
 /// Byte offsets in `text` where a hyphenated line break may occur and a
 /// hyphen glyph should be rendered: Knuth-Liang dictionary points inside
-/// words plus soft-hyphen (U+00AD) positions.
+/// words (in `lang_code`, an ISO 639-1 code) plus soft-hyphen (U+00AD)
+/// positions.
 ///
 /// Returned offsets are "break before this byte" positions, matching the
-/// UAX #14 offsets from [`enumerate_breaks`]. Word scanning is limited to
-/// runs of alphabetic chars; very short words are skipped (`hypher`'s
-/// per-language bounds already forbid breaks too close to word edges).
-fn hyphenation_breaks(text: &str) -> Vec<usize> {
-    use hypher::{Lang, hyphenate};
+/// UAX #14 offsets from [`enumerate_breaks`]. Soft hyphens are honored
+/// regardless of language; dictionary breaks apply only when the
+/// language's patterns are compiled in (`hypher::Lang::from_iso` resolves
+/// it) — otherwise it gracefully degrades to soft-hyphen-only.
+fn hyphenation_breaks(text: &str, lang_code: [u8; 2]) -> Vec<usize> {
+    use hypher::hyphenate;
 
     let mut offsets = Vec::new();
 
@@ -83,34 +85,36 @@ fn hyphenation_breaks(text: &str) -> Vec<usize> {
         }
     }
 
-    // Dictionary hyphenation, word by word.
-    let mut word_start: Option<usize> = None;
-    let flush = |start: usize, end: usize, offsets: &mut Vec<usize>| {
-        let word = &text[start..end];
-        // Skip trivially short words; `hyphenate` would yield no interior
-        // breaks anyway, and this avoids the call overhead.
-        if word.chars().count() < 5 {
-            return;
-        }
-        let mut pos = start;
-        let mut syllables = hyphenate(word, Lang::English).peekable();
-        while let Some(syl) = syllables.next() {
-            pos += syl.len();
-            // A break sits between syllables, not after the last one.
-            if syllables.peek().is_some() {
-                offsets.push(pos);
+    // Dictionary hyphenation, word by word — only if the language resolves.
+    if let Some(lang) = hypher::Lang::from_iso(lang_code) {
+        let mut word_start: Option<usize> = None;
+        let flush = |start: usize, end: usize, offsets: &mut Vec<usize>| {
+            let word = &text[start..end];
+            // Skip trivially short words; `hyphenate` would yield no interior
+            // breaks anyway, and this avoids the call overhead.
+            if word.chars().count() < 5 {
+                return;
+            }
+            let mut pos = start;
+            let mut syllables = hyphenate(word, lang).peekable();
+            while let Some(syl) = syllables.next() {
+                pos += syl.len();
+                // A break sits between syllables, not after the last one.
+                if syllables.peek().is_some() {
+                    offsets.push(pos);
+                }
+            }
+        };
+        for (idx, ch) in text.char_indices() {
+            if ch.is_alphabetic() {
+                word_start.get_or_insert(idx);
+            } else if let Some(start) = word_start.take() {
+                flush(start, idx, &mut offsets);
             }
         }
-    };
-    for (idx, ch) in text.char_indices() {
-        if ch.is_alphabetic() {
-            word_start.get_or_insert(idx);
-        } else if let Some(start) = word_start.take() {
-            flush(start, idx, &mut offsets);
+        if let Some(start) = word_start.take() {
+            flush(start, text.len(), &mut offsets);
         }
-    }
-    if let Some(start) = word_start.take() {
-        flush(start, text.len(), &mut offsets);
     }
 
     offsets.sort_unstable();
@@ -166,6 +170,16 @@ fn byte_offset_to_char_offset(text: &str, byte_offset: usize) -> usize {
     text[..off].chars().count()
 }
 
+/// Everything line wrapping needs to hyphenate: the pre-shaped hyphen
+/// glyph to append at a break and the ISO 639-1 language for the
+/// dictionary. Passed as `Some` only when hyphenation is enabled.
+pub struct Hyphenator {
+    /// Hyphen (`-`) glyph in the run's font, appended at hyphenated breaks.
+    pub glyph: ShapedGlyph,
+    /// ISO 639-1 language code for the Knuth-Liang dictionary.
+    pub language: [u8; 2],
+}
+
 /// Text alignment within a line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Alignment {
@@ -192,7 +206,7 @@ pub fn break_into_lines(
     alignment: Alignment,
     first_line_indent: f32,
     metrics: &FontMetricsPx,
-    hyphen: Option<ShapedGlyph>,
+    hyphenator: Option<Hyphenator>,
 ) -> Vec<LayoutLine> {
     if runs.is_empty() || text.is_empty() {
         // Empty paragraph: produce one empty line for the block to have height
@@ -214,12 +228,15 @@ pub fn break_into_lines(
 
     // Hyphenation break candidates (glyph indices). A break here needs a
     // trailing hyphen glyph and must reserve its advance in the fit check.
-    let hyphen_points = if hyphen.is_some() {
-        map_offsets_to_glyph_indices(&flat, &hyphenation_breaks(text))
+    let hyphen_points = if let Some(h) = &hyphenator {
+        map_offsets_to_glyph_indices(&flat, &hyphenation_breaks(text, h.language))
     } else {
         HashSet::new()
     };
-    let hyphen_adv = hyphen.as_ref().map(|g| g.x_advance).unwrap_or(0.0);
+    let hyphen_adv = hyphenator
+        .as_ref()
+        .map(|h| h.glyph.x_advance)
+        .unwrap_or(0.0);
 
     // Greedy line wrapping
     let mut lines = Vec::new();
@@ -267,8 +284,8 @@ pub fn break_into_lines(
                 indent,
                 text,
             );
-            if needs_hyphen && let Some(h) = &hyphen {
-                append_hyphen(&mut line, h);
+            if needs_hyphen && let Some(h) = &hyphenator {
+                append_hyphen(&mut line, &h.glyph);
             }
             lines.push(line);
 

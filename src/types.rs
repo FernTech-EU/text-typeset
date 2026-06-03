@@ -330,6 +330,35 @@ impl FontFeature {
     }
 }
 
+/// Hyphenation settings for line wrapping.
+///
+/// Presence (`Some`) enables hyphenation; the `language` selects the
+/// Knuth-Liang dictionary. Soft hyphens (U+00AD) always break and render a
+/// hyphen when enabled, regardless of language; dictionary hyphenation
+/// applies only when the language's patterns are compiled in (otherwise it
+/// silently falls back to soft-hyphen-only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hyphenation {
+    /// ISO 639-1 language code, e.g. `*b"en"`, `*b"fr"`, `*b"de"`.
+    pub language: [u8; 2],
+}
+
+impl Hyphenation {
+    /// Hyphenation in the given ISO 639-1 language.
+    pub const fn new(language: [u8; 2]) -> Self {
+        Self { language }
+    }
+
+    /// English hyphenation (`en`).
+    pub const ENGLISH: Self = Self { language: *b"en" };
+}
+
+impl Default for Hyphenation {
+    fn default() -> Self {
+        Self::ENGLISH
+    }
+}
+
 // ── Single-line API ────────────────────────────────────────────
 
 /// Text formatting parameters for the single-line layout API.
@@ -355,10 +384,10 @@ pub struct TextFormat {
     /// Discretionary OpenType features to toggle during shaping (ligatures,
     /// small caps, tabular numerals, stylistic sets, …). Empty = font defaults.
     pub features: Vec<FontFeature>,
-    /// Enable automatic hyphenation (English Knuth-Liang patterns) and
-    /// soft-hyphen (U+00AD) breaks during line wrapping. Off by default;
-    /// most useful for justified prose. See the paragraph layout path.
-    pub hyphenate: bool,
+    /// Hyphenation (Knuth-Liang dictionary + soft-hyphen breaks) for line
+    /// wrapping. `None` = disabled (default); most useful for justified
+    /// prose. See [`Hyphenation`].
+    pub hyphenation: Option<Hyphenation>,
 }
 
 /// Result of [`crate::DocumentFlow::layout_single_line`].

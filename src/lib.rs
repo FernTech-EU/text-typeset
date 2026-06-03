@@ -94,9 +94,9 @@ pub use layout::block::{PaintSpan, apply_paint_spans};
 pub use layout::inline_markup::{InlineAttrs, InlineMarkup, InlineSpan};
 pub use types::{
     BlockVisualInfo, CharacterGeometry, CursorAffinity, CursorDisplay, DecorationKind,
-    DecorationRect, FontFaceId, FontFeature, GlyphQuad, HitRegion, HitTestResult, ImageQuad,
-    LaidOutSpan, LaidOutSpanKind, ParagraphResult, RenderFrame, SingleLineResult, TextFormat,
-    UnderlineStyle, VerticalAlignment,
+    DecorationRect, FontFaceId, FontFeature, GlyphQuad, HitRegion, HitTestResult, Hyphenation,
+    ImageQuad, LaidOutSpan, LaidOutSpanKind, ParagraphResult, RenderFrame, SingleLineResult,
+    TextFormat, UnderlineStyle, VerticalAlignment,
 };
 
 pub use document_flow::{ContentWidthMode, DocumentFlow, RelayoutError};

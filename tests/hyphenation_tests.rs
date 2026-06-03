@@ -49,7 +49,7 @@ fn dictionary_hyphenation_breaks_a_long_word_with_a_hyphen() {
     let hyphen = hyphen_gid(&s);
 
     let mut params = make_block(1, LONG_WORD);
-    params.hyphenate = true;
+    params.hyphenation = Some(text_typeset::Hyphenation::ENGLISH);
     // Narrow column forces the single long word to wrap mid-word.
     let layout = layout_block(s.font_registry(), &params, 90.0, 1.0);
 
@@ -70,7 +70,7 @@ fn hyphenation_off_inserts_no_hyphen() {
     let hyphen = hyphen_gid(&s);
 
     let mut params = make_block(1, LONG_WORD);
-    params.hyphenate = false; // explicit: the default
+    params.hyphenation = None; // explicit: the default
     let layout = layout_block(s.font_registry(), &params, 90.0, 1.0);
 
     assert!(
@@ -99,7 +99,7 @@ fn soft_hyphen_breaks_and_renders_a_hyphen() {
     // column the line should break at the SHY and render a hyphen there.
     let text = "verylongunbreak\u{00AD}ablecompoundword";
     let mut params = make_block(1, text);
-    params.hyphenate = true;
+    params.hyphenation = Some(text_typeset::Hyphenation::ENGLISH);
     let layout = layout_block(s.font_registry(), &params, 110.0, 1.0);
 
     assert!(layout.lines.len() >= 2, "soft-hyphen word should wrap");
@@ -116,7 +116,7 @@ fn hyphenation_does_not_change_text_that_fits() {
     let hyphen = hyphen_gid(&s);
 
     let mut on = make_block(1, "short words here");
-    on.hyphenate = true;
+    on.hyphenation = Some(text_typeset::Hyphenation::ENGLISH);
     let layout_on = layout_block(s.font_registry(), &on, 1000.0, 1.0);
 
     let off = make_block(1, "short words here");

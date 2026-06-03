@@ -1,7 +1,7 @@
 use crate::font::registry::FontRegistry;
 use crate::font::resolve::{ResolvedFont, resolve_font};
 use crate::layout::line::LayoutLine;
-use crate::layout::paragraph::{Alignment, break_into_lines};
+use crate::layout::paragraph::{Alignment, Hyphenator, break_into_lines};
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
 use crate::shaping::shaper::{
     FontMetricsPx, TextDirection, font_metrics_px, shape_text, shape_text_with_fallback,
@@ -64,9 +64,9 @@ pub struct BlockLayoutParams {
     pub line_height_multiplier: Option<f32>,
     /// If true, prevent line wrapping. The entire block is one long line.
     pub non_breakable_lines: bool,
-    /// Enable automatic + soft-hyphen hyphenation during line wrapping
-    /// (English patterns). Off by default. See [`crate::types::TextFormat::hyphenate`].
-    pub hyphenate: bool,
+    /// Hyphenation during line wrapping (`None` = off). See
+    /// [`crate::types::Hyphenation`].
+    pub hyphenation: Option<crate::types::Hyphenation>,
     /// Checkbox marker: None = no checkbox, Some(false) = unchecked, Some(true) = checked.
     pub checkbox: Option<bool>,
     /// Block background color (RGBA). None means transparent.
@@ -250,11 +250,15 @@ pub fn layout_block(
 
     // Hyphenation: a hyphen glyph shaped in the default font, supplied only
     // when enabled and wrapping is in effect.
-    let hyphen = if params.hyphenate && !params.non_breakable_lines {
-        shape_hyphen(registry, scale_factor)
-    } else {
-        None
-    };
+    let hyphenator = params
+        .hyphenation
+        .filter(|_| !params.non_breakable_lines)
+        .and_then(|h| {
+            shape_hyphen(registry, scale_factor).map(|glyph| Hyphenator {
+                glyph,
+                language: h.language,
+            })
+        });
 
     // Break shaped runs into lines
     let mut lines = break_into_lines(
@@ -264,7 +268,7 @@ pub fn layout_block(
         params.alignment,
         params.text_indent,
         &metrics,
-        hyphen,
+        hyphenator,
     );
 
     // Apply line height multiplier

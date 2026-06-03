@@ -567,7 +567,7 @@ pub fn make_block_at(id: usize, position: usize, text: &str) -> BlockLayoutParam
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     }

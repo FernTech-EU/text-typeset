@@ -203,7 +203,7 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
             || block.block_format.is_code_block == Some(true),
         // text-document has no hyphenation flag yet; hosts opt in via the
         // text-typeset BlockLayoutParams directly.
-        hyphenate: false,
+        hyphenation: None,
         checkbox,
         background_color: block
             .block_format

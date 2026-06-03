@@ -13,8 +13,24 @@ readme = "README.md"
 edition = "2024"
 
 [features]
-default = ["text-document"]
+default = ["text-document", "hyphenation-western-european"]
 text-document = ["dep:text-document"]
+
+# Hyphenation language coverage. Western European is the default; opt into
+# every language hypher ships with `hyphenation-all-languages` (~1.2 MB of
+# read-only trie data vs ~0.3 MB). Languages not compiled in fall back to
+# soft-hyphen-only breaking at runtime (`hypher::Lang::from_iso` → None).
+hyphenation-western-european = [
+    "hypher/alloc",
+    "hypher/english",
+    "hypher/french",
+    "hypher/german",
+    "hypher/spanish",
+    "hypher/italian",
+    "hypher/portuguese",
+    "hypher/dutch",
+]
+hyphenation-all-languages = ["hypher/default"]
 
 [dependencies]
 harfrust = "0.7"
@@ -25,7 +41,10 @@ icu_segmenter = "2"
 unicode-bidi = "0.3"
 thiserror = "2.0"
 text-document = { path = "../text-document/crates/public_api", version = "1.5.6", optional = true }
-hypher = { version = "0.1.7", default-features = false, features = ["alloc", "english"] }
+# Languages are gated by this crate's `hyphenation-*` features (see
+# [features]); the runtime language is chosen via ISO 639-1 code
+# (hypher::Lang::from_iso).
+hypher = { version = "0.1.7", default-features = false }
 
 [dev-dependencies]
 text-document = { path = "../text-document/crates/public_api", version = "1.5.6" }

@@ -194,7 +194,7 @@ fn relayout_block_updates_render() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -311,7 +311,7 @@ fn multi_fragment_block_renders_all_glyphs() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -404,7 +404,7 @@ fn underline_produces_decoration_rect() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -471,7 +471,7 @@ fn strikeout_produces_decoration_rect() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -559,7 +559,7 @@ fn letter_spacing_increases_total_width() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -630,7 +630,7 @@ fn word_spacing_increases_gap_between_words() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -805,7 +805,7 @@ fn list_marker_renders_extra_glyphs() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -865,7 +865,7 @@ fn list_marker_positioned_left_of_content() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -943,7 +943,7 @@ fn list_indent_shifts_content_right() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -1446,7 +1446,7 @@ fn underline_inside_table_cell_produces_decoration() {
             tab_positions: vec![],
             line_height_multiplier: None,
             non_breakable_lines: false,
-            hyphenate: false,
+            hyphenation: None,
             checkbox: None,
             background_color: None,
         }],
@@ -1534,7 +1534,7 @@ fn underline_inside_frame_produces_decoration() {
                 tab_positions: vec![],
                 line_height_multiplier: None,
                 non_breakable_lines: false,
-                hyphenate: false,
+                hyphenation: None,
                 checkbox: None,
                 background_color: None,
             },
@@ -1689,7 +1689,7 @@ fn overline_produces_decoration_rect() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -1835,7 +1835,7 @@ fn relayout_block_shifts_table_below() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };
@@ -2228,7 +2228,7 @@ fn make_image_block(id: usize, image_name: &str, width: f32, height: f32) -> Blo
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     }
@@ -2361,7 +2361,7 @@ fn mixed_text_and_image_both_render() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
-        hyphenate: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     }]);
