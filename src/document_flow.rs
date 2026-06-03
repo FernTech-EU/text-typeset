@@ -154,6 +154,12 @@ pub struct DocumentFlow {
     /// verbatim. Threaded into the bridge via [`crate::bridge::BridgeOptions::echo_char`]
     /// from `layout_full`. See [`set_echo_char`](Self::set_echo_char).
     echo_char: Option<char>,
+    /// Auto-hyphenate justified blocks that don't set `hyphenate`
+    /// explicitly. Threaded into the bridge via
+    /// [`crate::bridge::BridgeOptions::hyphenate_justified`] from
+    /// `layout_full`. Enable on prose surfaces only. `false` by default.
+    /// See [`set_hyphenate_justified`](Self::set_hyphenate_justified).
+    hyphenate_justified: bool,
     cursors: Vec<CursorDisplay>,
     zoom: f32,
     rendered_zoom: f32,
@@ -188,6 +194,7 @@ impl DocumentFlow {
             code_block_background: [0.95, 0.95, 0.95, 1.0],
             code_block_foreground: None,
             echo_char: None,
+            hyphenate_justified: false,
             cursors: Vec::new(),
             zoom: 1.0,
             rendered_zoom: f32::NAN,
@@ -349,6 +356,7 @@ impl DocumentFlow {
             code_block_background: self.code_block_background,
             code_block_foreground: self.code_block_foreground,
             echo_char: self.echo_char,
+            hyphenate_justified: self.hyphenate_justified,
         };
         let converted = convert_flow_with(flow, &opts);
 
@@ -1584,6 +1592,19 @@ impl DocumentFlow {
     /// Current code-block background default.
     pub fn code_block_background(&self) -> [f32; 4] {
         self.code_block_background
+    }
+
+    /// Auto-hyphenate justified blocks (that don't set `hyphenate`
+    /// explicitly) on future `layout_full` / `relayout_block` calls.
+    /// Enable on prose/rich-text surfaces; leave off for single-line or
+    /// label widgets. Default `false`.
+    pub fn set_hyphenate_justified(&mut self, enabled: bool) {
+        self.hyphenate_justified = enabled;
+    }
+
+    /// Whether justified blocks are auto-hyphenated.
+    pub fn hyphenate_justified(&self) -> bool {
+        self.hyphenate_justified
     }
 
     /// Set the foreground used for monospaced runs (inline `code`,

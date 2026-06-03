@@ -59,6 +59,14 @@ pub struct BridgeOptions {
     /// with the host document's positions. `None` (default) lays text
     /// out verbatim.
     pub echo_char: Option<char>,
+    /// When true, blocks that are **justified** and don't set the
+    /// `hyphenate` flag explicitly are hyphenated automatically (in the
+    /// block's `language`, defaulting to English). This pairs hyphenation
+    /// with justification — its primary use case — without requiring a
+    /// per-block flag. An explicit `BlockFormat.hyphenate` (true or false)
+    /// always wins. Hosts should enable this only for prose/rich-text
+    /// surfaces, not single-line/label widgets. `false` by default.
+    pub hyphenate_justified: bool,
 }
 
 impl Default for BridgeOptions {
@@ -67,6 +75,7 @@ impl Default for BridgeOptions {
             code_block_background: [0.95, 0.95, 0.95, 1.0],
             code_block_foreground: None,
             echo_char: None,
+            hyphenate_justified: false,
         }
     }
 }
@@ -216,19 +225,25 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
         non_breakable_lines: block.block_format.non_breakable_lines.unwrap_or(false)
             || block.block_format.is_code_block == Some(true),
         // Map the document's per-block hyphenation flag + language to the
-        // engine's Hyphenation config. Language defaults to English when
-        // unset or unparseable; unsupported languages degrade to
+        // engine's Hyphenation config. An explicit `hyphenate` flag always
+        // wins; when it's unset, `hyphenate_justified` opts justified
+        // blocks in (hyphenation's main use case). Language defaults to
+        // English when unset/unparseable; unsupported languages degrade to
         // soft-hyphen-only at wrap time.
-        hyphenation: (block.block_format.hyphenate == Some(true)).then(|| {
-            crate::types::Hyphenation {
+        hyphenation: {
+            let enabled = match block.block_format.hyphenate {
+                Some(v) => v,
+                None => opts.hyphenate_justified && alignment == Alignment::Justify,
+            };
+            enabled.then(|| crate::types::Hyphenation {
                 language: block
                     .block_format
                     .language
                     .as_deref()
                     .and_then(iso639_1)
                     .unwrap_or(*b"en"),
-            }
-        }),
+            })
+        },
         checkbox,
         background_color: block
             .block_format
