@@ -355,6 +355,10 @@ pub struct TextFormat {
     /// Discretionary OpenType features to toggle during shaping (ligatures,
     /// small caps, tabular numerals, stylistic sets, …). Empty = font defaults.
     pub features: Vec<FontFeature>,
+    /// Enable automatic hyphenation (English Knuth-Liang patterns) and
+    /// soft-hyphen (U+00AD) breaks during line wrapping. Off by default;
+    /// most useful for justified prose. See the paragraph layout path.
+    pub hyphenate: bool,
 }
 
 /// Result of [`crate::DocumentFlow::layout_single_line`].

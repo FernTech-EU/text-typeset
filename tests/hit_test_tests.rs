@@ -623,6 +623,7 @@ fn hit_test_link_region_detected() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
+        hyphenate: false,
         checkbox: None,
         background_color: None,
     };

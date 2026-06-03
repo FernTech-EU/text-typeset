@@ -201,6 +201,9 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
         line_height_multiplier: block.block_format.line_height,
         non_breakable_lines: block.block_format.non_breakable_lines.unwrap_or(false)
             || block.block_format.is_code_block == Some(true),
+        // text-document has no hyphenation flag yet; hosts opt in via the
+        // text-typeset BlockLayoutParams directly.
+        hyphenate: false,
         checkbox,
         background_color: block
             .block_format

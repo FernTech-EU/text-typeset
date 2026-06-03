@@ -2,7 +2,7 @@ use crate::font::registry::FontRegistry;
 use crate::font::resolve::{ResolvedFont, resolve_font};
 use crate::layout::line::LayoutLine;
 use crate::layout::paragraph::{Alignment, break_into_lines};
-use crate::shaping::run::ShapedRun;
+use crate::shaping::run::{ShapedGlyph, ShapedRun};
 use crate::shaping::shaper::{
     FontMetricsPx, TextDirection, font_metrics_px, shape_text, shape_text_with_fallback,
     to_harfrust_features,
@@ -64,6 +64,9 @@ pub struct BlockLayoutParams {
     pub line_height_multiplier: Option<f32>,
     /// If true, prevent line wrapping. The entire block is one long line.
     pub non_breakable_lines: bool,
+    /// Enable automatic + soft-hyphen hyphenation during line wrapping
+    /// (English patterns). Off by default. See [`crate::types::TextFormat::hyphenate`].
+    pub hyphenate: bool,
     /// Checkbox marker: None = no checkbox, Some(false) = unchecked, Some(true) = checked.
     pub checkbox: Option<bool>,
     /// Block background color (RGBA). None means transparent.
@@ -141,7 +144,6 @@ pub fn layout_block(
     for frag in &params.fragments {
         // Inline image: create a synthetic run with one placeholder glyph
         if let Some(ref image_name) = frag.image_name {
-            use crate::shaping::run::{ShapedGlyph, ShapedRun};
             let image_glyph = ShapedGlyph {
                 glyph_id: 0,
                 cluster: 0,
@@ -246,6 +248,14 @@ pub fn layout_block(
         content_width
     };
 
+    // Hyphenation: a hyphen glyph shaped in the default font, supplied only
+    // when enabled and wrapping is in effect.
+    let hyphen = if params.hyphenate && !params.non_breakable_lines {
+        shape_hyphen(registry, scale_factor)
+    } else {
+        None
+    };
+
     // Break shaped runs into lines
     let mut lines = break_into_lines(
         shaped_runs,
@@ -254,6 +264,7 @@ pub fn layout_block(
         params.alignment,
         params.text_indent,
         &metrics,
+        hyphen,
     );
 
     // Apply line height multiplier
@@ -503,6 +514,14 @@ fn apply_spacing(run: &mut ShapedRun, text: &str, letter_spacing: f32, word_spac
         }
     }
     run.advance_width += extra_advance;
+}
+
+/// Shape a hyphen glyph (`-`) in the default font, for appending at
+/// hyphenated line breaks. Returns `None` if no default font resolves.
+pub(crate) fn shape_hyphen(registry: &FontRegistry, scale_factor: f32) -> Option<ShapedGlyph> {
+    let resolved = resolve_font(registry, None, None, None, None, None, scale_factor)?;
+    let run = shape_text(registry, &resolved, "-", 0)?;
+    run.glyphs.into_iter().next()
 }
 
 /// Shape the list marker text and position it in the indent area.

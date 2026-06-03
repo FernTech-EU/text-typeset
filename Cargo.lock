@@ -562,6 +562,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hypher"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef68590049bab63a464eee1a1158ac04c6f6613a546d8d90f78636b8b94f171"
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1684,6 +1690,7 @@ dependencies = [
  "etagere",
  "fontdb",
  "harfrust",
+ "hypher",
  "icu_segmenter",
  "insta",
  "proptest",

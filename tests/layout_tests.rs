@@ -21,7 +21,7 @@ fn layout_text(
     let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
     let run = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
-    break_into_lines(vec![run], text, width, alignment, 0.0, &metrics)
+    break_into_lines(vec![run], text, width, alignment, 0.0, &metrics, None)
 }
 
 #[test]
@@ -197,10 +197,19 @@ fn first_line_indent_reduces_available_space() {
         Alignment::Left,
         0.0,
         &metrics,
+        None,
     );
 
     let run2 = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
-    let with_indent = break_into_lines(vec![run2], text, 200.0, Alignment::Left, 50.0, &metrics);
+    let with_indent = break_into_lines(
+        vec![run2],
+        text,
+        200.0,
+        Alignment::Left,
+        50.0,
+        &metrics,
+        None,
+    );
 
     assert!(
         with_indent.len() >= no_indent.len(),
@@ -231,7 +240,7 @@ fn all_glyphs_accounted_for_after_wrapping() {
     let total_glyphs: usize = run.glyphs.len();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
 
-    let lines = break_into_lines(vec![run], text, 150.0, Alignment::Left, 0.0, &metrics);
+    let lines = break_into_lines(vec![run], text, 150.0, Alignment::Left, 0.0, &metrics, None);
 
     let glyphs_in_lines: usize = lines
         .iter()
@@ -509,7 +518,15 @@ fn text_indent_shifts_first_line() {
     let run = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
 
-    let lines = break_into_lines(vec![run], text, 300.0, Alignment::Left, 40.0, &metrics);
+    let lines = break_into_lines(
+        vec![run],
+        text,
+        300.0,
+        Alignment::Left,
+        40.0,
+        &metrics,
+        None,
+    );
 
     // First line should have its first run starting at x >= 40 (the indent)
     assert!(!lines.is_empty());
@@ -555,6 +572,7 @@ fn multi_fragment_all_glyphs_accounted() {
         Alignment::Left,
         0.0,
         &metrics,
+        None,
     );
 
     let in_lines: usize = lines
@@ -596,6 +614,7 @@ fn multi_fragment_wrapping_breaks_at_correct_boundary() {
         Alignment::Left,
         0.0,
         &metrics,
+        None,
     );
 
     assert!(

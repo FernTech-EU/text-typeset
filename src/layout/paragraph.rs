@@ -6,7 +6,7 @@ use icu_segmenter::LineSegmenter;
 use icu_segmenter::options::LineBreakOptions;
 
 use crate::layout::line::{LayoutLine, PositionedRun, RunDecorations};
-use crate::shaping::run::ShapedRun;
+use crate::shaping::run::{ShapedGlyph, ShapedRun};
 use crate::shaping::shaper::FontMetricsPx;
 
 /// Whether a break opportunity *must* be taken (LB4/LB5 hard line
@@ -63,6 +63,94 @@ fn enumerate_breaks(text: &str) -> Vec<(usize, BreakOpportunity)> {
         .collect()
 }
 
+/// Byte offsets in `text` where a hyphenated line break may occur and a
+/// hyphen glyph should be rendered: Knuth-Liang dictionary points inside
+/// words plus soft-hyphen (U+00AD) positions.
+///
+/// Returned offsets are "break before this byte" positions, matching the
+/// UAX #14 offsets from [`enumerate_breaks`]. Word scanning is limited to
+/// runs of alphabetic chars; very short words are skipped (`hypher`'s
+/// per-language bounds already forbid breaks too close to word edges).
+fn hyphenation_breaks(text: &str) -> Vec<usize> {
+    use hypher::{Lang, hyphenate};
+
+    let mut offsets = Vec::new();
+
+    // Soft hyphens: break after the U+00AD so the hyphen renders at line end.
+    for (idx, ch) in text.char_indices() {
+        if ch == '\u{00AD}' {
+            offsets.push(idx + ch.len_utf8());
+        }
+    }
+
+    // Dictionary hyphenation, word by word.
+    let mut word_start: Option<usize> = None;
+    let flush = |start: usize, end: usize, offsets: &mut Vec<usize>| {
+        let word = &text[start..end];
+        // Skip trivially short words; `hyphenate` would yield no interior
+        // breaks anyway, and this avoids the call overhead.
+        if word.chars().count() < 5 {
+            return;
+        }
+        let mut pos = start;
+        let mut syllables = hyphenate(word, Lang::English).peekable();
+        while let Some(syl) = syllables.next() {
+            pos += syl.len();
+            // A break sits between syllables, not after the last one.
+            if syllables.peek().is_some() {
+                offsets.push(pos);
+            }
+        }
+    };
+    for (idx, ch) in text.char_indices() {
+        if ch.is_alphabetic() {
+            word_start.get_or_insert(idx);
+        } else if let Some(start) = word_start.take() {
+            flush(start, idx, &mut offsets);
+        }
+    }
+    if let Some(start) = word_start.take() {
+        flush(start, text.len(), &mut offsets);
+    }
+
+    offsets.sort_unstable();
+    offsets.dedup();
+    offsets
+}
+
+/// Map hyphenation byte offsets to glyph indices (first glyph whose
+/// cluster is `>=` the offset), mirroring [`map_breaks_to_glyph_indices`].
+fn map_offsets_to_glyph_indices(flat: &[FlatGlyph], offsets: &[usize]) -> HashSet<usize> {
+    let mut set = HashSet::new();
+    let mut cursor = 0usize;
+    for &byte_offset in offsets {
+        while cursor < flat.len() && (flat[cursor].cluster as usize) < byte_offset {
+            cursor += 1;
+        }
+        set.insert(cursor.min(flat.len()));
+    }
+    set
+}
+
+/// Append a rendered hyphen glyph to the end of a line that broke at a
+/// hyphenation point, accounting for its advance in the run and line
+/// widths. The hyphen inherits the last glyph's cluster so caret/hit
+/// math treats it as part of the final character.
+fn append_hyphen(line: &mut LayoutLine, hyphen: &ShapedGlyph) {
+    if let Some(run) = line.runs.last_mut() {
+        let mut g = hyphen.clone();
+        g.cluster = run
+            .shaped_run
+            .glyphs
+            .last()
+            .map(|gl| gl.cluster)
+            .unwrap_or(0);
+        run.shaped_run.glyphs.push(g);
+        run.shaped_run.advance_width += hyphen.x_advance;
+        line.width += hyphen.x_advance;
+    }
+}
+
 /// Convert a byte offset within a UTF-8 string to a char offset.
 ///
 /// Clamps to `text.len()` and rounds down to the nearest char boundary
@@ -104,6 +192,7 @@ pub fn break_into_lines(
     alignment: Alignment,
     first_line_indent: f32,
     metrics: &FontMetricsPx,
+    hyphen: Option<ShapedGlyph>,
 ) -> Vec<LayoutLine> {
     if runs.is_empty() || text.is_empty() {
         // Empty paragraph: produce one empty line for the block to have height
@@ -123,11 +212,22 @@ pub fn break_into_lines(
     // Build sets of allowed and mandatory break positions (glyph indices)
     let (break_points, mandatory_breaks) = map_breaks_to_glyph_indices(&flat, &breaks);
 
+    // Hyphenation break candidates (glyph indices). A break here needs a
+    // trailing hyphen glyph and must reserve its advance in the fit check.
+    let hyphen_points = if hyphen.is_some() {
+        map_offsets_to_glyph_indices(&flat, &hyphenation_breaks(text))
+    } else {
+        HashSet::new()
+    };
+    let hyphen_adv = hyphen.as_ref().map(|g| g.x_advance).unwrap_or(0.0);
+
     // Greedy line wrapping
     let mut lines = Vec::new();
     let mut line_start_glyph = 0usize;
     let mut line_width = 0.0f32;
-    let mut last_break_glyph: Option<usize> = None;
+    // Last break opportunity within the current line: (glyph index, whether
+    // breaking there renders a hyphen).
+    let mut last_break: Option<(usize, bool)> = None;
     // First line may be indented; subsequent lines use full width
     let mut effective_width = available_width - first_line_indent;
 
@@ -141,16 +241,16 @@ pub fn break_into_lines(
         let exceeds_width = line_width > effective_width && line_start_glyph < i;
 
         if is_mandatory || exceeds_width {
-            let break_at = if is_mandatory {
-                i + 1
-            } else if let Some(bp) = last_break_glyph {
+            let (break_at, needs_hyphen) = if is_mandatory {
+                (i + 1, false)
+            } else if let Some((bp, hy)) = last_break {
                 if bp > line_start_glyph {
-                    bp
+                    (bp, hy)
                 } else {
-                    i + 1 // emergency break -no opportunity found
+                    (i + 1, false) // emergency break -no opportunity found
                 }
             } else {
-                i + 1 // emergency break -no break opportunities at all
+                (i + 1, false) // emergency break -no break opportunities at all
             };
 
             let indent = if lines.is_empty() {
@@ -158,7 +258,7 @@ pub fn break_into_lines(
             } else {
                 0.0
             };
-            let line = build_line(
+            let mut line = build_line(
                 &runs,
                 &flat,
                 line_start_glyph,
@@ -167,6 +267,9 @@ pub fn break_into_lines(
                 indent,
                 text,
             );
+            if needs_hyphen && let Some(h) = &hyphen {
+                append_hyphen(&mut line, h);
+            }
             lines.push(line);
 
             line_start_glyph = break_at;
@@ -179,15 +282,19 @@ pub fn break_into_lines(
                     line_width += flat[j].x_advance;
                 }
             }
-            last_break_glyph = None;
+            last_break = None;
         }
 
-        // Update break point AFTER the width check so that a break opportunity
+        // Update the break opportunity AFTER the width check so that a break
         // discovered at this glyph does not clobber the previous one when the
-        // width is already exceeded. This prevents the end-of-text mandatory
-        // break from keeping the last glyph on an overflowing line.
-        if break_points.contains(&(i + 1)) {
-            last_break_glyph = Some(i + 1);
+        // width is already exceeded. Hyphenation points are checked first so
+        // a soft hyphen (which is also a UAX #14 opportunity) renders its
+        // hyphen; they only count when the hyphen itself still fits.
+        let at = i + 1;
+        if hyphen_points.contains(&at) && line_width + hyphen_adv <= effective_width {
+            last_break = Some((at, true));
+        } else if break_points.contains(&at) {
+            last_break = Some((at, false));
         }
     }
 

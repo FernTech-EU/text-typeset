@@ -1031,7 +1031,21 @@ impl DocumentFlow {
             return empty;
         }
 
-        let lines = break_into_lines(runs, text, max_width, Alignment::Left, 0.0, &metrics);
+        let hyphen = if format.hyphenate {
+            shape_text(&service.font_registry, &resolved, "-", 0)
+                .and_then(|r| r.glyphs.into_iter().next())
+        } else {
+            None
+        };
+        let lines = break_into_lines(
+            runs,
+            text,
+            max_width,
+            Alignment::Left,
+            0.0,
+            &metrics,
+            hyphen,
+        );
 
         let line_count = match max_lines {
             Some(n) => lines.len().min(n),
@@ -1320,7 +1334,21 @@ impl DocumentFlow {
             return empty;
         }
 
-        let lines = break_into_lines(all_runs, &flat, max_width, Alignment::Left, 0.0, &metrics);
+        let hyphen = if format.hyphenate {
+            shape_text(&service.font_registry, &base_resolved, "-", 0)
+                .and_then(|r| r.glyphs.into_iter().next())
+        } else {
+            None
+        };
+        let lines = break_into_lines(
+            all_runs,
+            &flat,
+            max_width,
+            Alignment::Left,
+            0.0,
+            &metrics,
+            hyphen,
+        );
 
         let line_count = match max_lines {
             Some(n) => lines.len().min(n),
@@ -1896,6 +1924,7 @@ mod tests {
             tab_positions: vec![],
             line_height_multiplier: None,
             non_breakable_lines: false,
+            hyphenate: false,
             checkbox: None,
             background_color: None,
         }
