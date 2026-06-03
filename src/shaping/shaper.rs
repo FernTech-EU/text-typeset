@@ -1,4 +1,4 @@
-use harfrust::{Direction, Feature, FontRef, Tag, UnicodeBuffer};
+use harfrust::{Direction, Feature, FontRef, ShapeOptions, Tag, UnicodeBuffer};
 
 use crate::font::registry::FontRegistry;
 use crate::font::resolve::ResolvedFont;
@@ -208,7 +208,7 @@ pub fn shape_text_directed(
     // (every relayout/keystroke) reuse the same preprocessed tables.
     let shaper_data = entry.shaper_data(&font);
     let shaper = shaper_data.shaper(&font).build();
-    let glyph_buffer = shaper.shape(buffer, features);
+    let glyph_buffer = shaper.shape(buffer, ShapeOptions::new().features(features));
 
     let infos = glyph_buffer.glyph_infos();
     let positions = glyph_buffer.glyph_positions();
@@ -293,7 +293,7 @@ pub fn shape_text_with_buffer(
 
     let shaper_data = entry.shaper_data(&font);
     let shaper = shaper_data.shaper(&font).build();
-    let glyph_buffer = shaper.shape(buffer, features);
+    let glyph_buffer = shaper.shape(buffer, ShapeOptions::new().features(features));
 
     let infos = glyph_buffer.glyph_infos();
     let positions = glyph_buffer.glyph_positions();

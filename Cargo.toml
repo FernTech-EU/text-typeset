@@ -33,7 +33,7 @@ hyphenation-western-european = [
 hyphenation-all-languages = ["hypher/default"]
 
 [dependencies]
-harfrust = "0.7"
+harfrust = "0.8.4"
 swash = "0.2"
 fontdb = "0.23.0"
 etagere = "0.3"
