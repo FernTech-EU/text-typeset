@@ -118,16 +118,35 @@ pub struct TextFontService {
 }
 
 impl TextFontService {
-    /// Create an empty service with no fonts registered.
+    /// Create a service whose font registry is pre-populated with the
+    /// operating system's fonts, so arbitrary documents (CJK, emoji,
+    /// scripts the host didn't bundle) still render via glyph fallback.
     ///
-    /// Call [`register_font`](Self::register_font) and
-    /// [`set_default_font`](Self::set_default_font) before any
-    /// [`DocumentFlow`] lays out content against this service.
+    /// Still call [`set_default_font`](Self::set_default_font) (and
+    /// usually [`register_font`](Self::register_font) for the primary
+    /// UI font) before any [`DocumentFlow`] lays out content.
+    ///
+    /// Enumerating OS fonts is a one-time startup cost; their bytes load
+    /// lazily on first use. Use
+    /// [`new_without_system_fonts`](Self::new_without_system_fonts) to
+    /// skip the scan and keep a fully host-controlled font set.
     ///
     /// [`DocumentFlow`]: crate::DocumentFlow
     pub fn new() -> Self {
+        Self::with_registry(FontRegistry::new())
+    }
+
+    /// Like [`new`](Self::new) but with no OS font enumeration: only
+    /// fonts added via `register_font*` are available. Use this when the
+    /// host ships a controlled font set and wants neither the startup
+    /// scan nor implicit system fonts.
+    pub fn new_without_system_fonts() -> Self {
+        Self::with_registry(FontRegistry::new_without_system_fonts())
+    }
+
+    fn with_registry(font_registry: FontRegistry) -> Self {
         Self {
-            font_registry: FontRegistry::new(),
+            font_registry,
             atlas: GlyphAtlas::new(),
             glyph_cache: GlyphCache::new(),
             scale_context: swash::scale::ScaleContext::new(),

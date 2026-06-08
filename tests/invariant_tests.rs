@@ -113,6 +113,41 @@ proptest! {
     }
 }
 
+// Concrete regression guards for Invariant 4. The proptest above can
+// stumble onto a ligature by chance; these pin the `== n` contract for
+// the specific inputs that deterministically exercise the shaper's
+// `liga` substitution ("fi" → one glyph, "ffi" → one glyph in most
+// fonts). The collapse was a real accessibility bug — `character_
+// geometry` returned zero entries for a ligated range, leaving a
+// screen reader unable to place the caret between the characters —
+// fixed by computing `line.char_range` end from text length rather
+// than glyph count. Kept as named cases so a regression points at the
+// ligature path directly instead of at a shrunken random string.
+
+#[test]
+fn ligature_character_geometry_returns_one_entry_per_char() {
+    let mut ts = make_typesetter();
+    ts.layout_blocks(vec![make_block(1, "fi")]);
+    let geom = ts.character_geometry(1, 0, 2);
+    // One entry per character, so the caret can sit between `f` and `i`
+    // even when they shape to a single ligature glyph.
+    assert_eq!(
+        geom.len(),
+        2,
+        "ligature must not collapse character_geometry entries"
+    );
+}
+
+#[test]
+fn ffi_ligature_character_geometry_returns_three_entries() {
+    let mut ts = make_typesetter();
+    ts.layout_blocks(vec![make_block(1, "ffi")]);
+    let geom = ts.character_geometry(1, 0, 3);
+    // "ffi" triggers a 3→1 ligature in many fonts; the character
+    // geometry must still expose three caret slots.
+    assert_eq!(geom.len(), 3, "ffi ligature must expose 3 character slots");
+}
+
 // ── Invariant 5: hit_test → caret_rect round-trip ───────────────────
 // If a hit-test returns position P, then asking for the caret rect at
 // P should produce a rectangle whose horizontal range contains the

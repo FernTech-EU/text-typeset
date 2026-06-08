@@ -16,6 +16,20 @@ use crate::layout::table::{CellLayoutParams, TableLayoutParams};
 const DEFAULT_LIST_INDENT: f32 = 24.0;
 const INDENT_PER_LEVEL: f32 = 24.0;
 
+/// Parse a 2-letter ISO 639-1 code (e.g. "en", "fr") into a lowercased
+/// byte pair for `hypher::Lang::from_iso`. Returns `None` for anything
+/// that isn't two ASCII letters (incl. longer tags like "en-US" — only
+/// the primary subtag matters, so callers may pass that and we take the
+/// first two letters).
+fn iso639_1(code: &str) -> Option<[u8; 2]> {
+    let b = code.trim().as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1].is_ascii_alphabetic() {
+        Some([b[0].to_ascii_lowercase(), b[1].to_ascii_lowercase()])
+    } else {
+        None
+    }
+}
+
 /// Per-call knobs threaded through the conversion functions so that a
 /// host widget can override defaults driven by its active theme.
 ///
@@ -45,6 +59,14 @@ pub struct BridgeOptions {
     /// with the host document's positions. `None` (default) lays text
     /// out verbatim.
     pub echo_char: Option<char>,
+    /// When true, blocks that are **justified** and don't set the
+    /// `hyphenate` flag explicitly are hyphenated automatically (in the
+    /// block's `language`, defaulting to English). This pairs hyphenation
+    /// with justification — its primary use case — without requiring a
+    /// per-block flag. An explicit `BlockFormat.hyphenate` (true or false)
+    /// always wins. Hosts should enable this only for prose/rich-text
+    /// surfaces, not single-line/label widgets. `false` by default.
+    pub hyphenate_justified: bool,
 }
 
 impl Default for BridgeOptions {
@@ -53,6 +75,7 @@ impl Default for BridgeOptions {
             code_block_background: [0.95, 0.95, 0.95, 1.0],
             code_block_foreground: None,
             echo_char: None,
+            hyphenate_justified: false,
         }
     }
 }
@@ -201,6 +224,26 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
         line_height_multiplier: block.block_format.line_height,
         non_breakable_lines: block.block_format.non_breakable_lines.unwrap_or(false)
             || block.block_format.is_code_block == Some(true),
+        // Map the document's per-block hyphenation flag + language to the
+        // engine's Hyphenation config. An explicit `hyphenate` flag always
+        // wins; when it's unset, `hyphenate_justified` opts justified
+        // blocks in (hyphenation's main use case). Language defaults to
+        // English when unset/unparseable; unsupported languages degrade to
+        // soft-hyphen-only at wrap time.
+        hyphenation: {
+            let enabled = match block.block_format.hyphenate {
+                Some(v) => v,
+                None => opts.hyphenate_justified && alignment == Alignment::Justify,
+            };
+            enabled.then(|| crate::types::Hyphenation {
+                language: block
+                    .block_format
+                    .language
+                    .as_deref()
+                    .and_then(iso639_1)
+                    .unwrap_or(*b"en"),
+            })
+        },
         checkbox,
         background_color: block
             .block_format
@@ -316,6 +359,7 @@ fn convert_fragment(
                 image_name: None,
                 image_width: 0.0,
                 image_height: 0.0,
+                features: Vec::new(),
             }
         }
         FragmentContent::Image {
@@ -349,6 +393,7 @@ fn convert_fragment(
             image_name: Some(name.clone()),
             image_width: *width as f32,
             image_height: *height as f32,
+            features: Vec::new(),
         },
     }
 }
@@ -699,5 +744,27 @@ pub fn convert_frame_with(frame: &FrameSnapshot, opts: &BridgeOptions) -> FrameL
         blocks,
         tables,
         frames,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iso639_1;
+
+    #[test]
+    fn iso639_1_parses_two_letter_codes_case_insensitively() {
+        assert_eq!(iso639_1("en"), Some(*b"en"));
+        assert_eq!(iso639_1("FR"), Some(*b"fr"));
+        assert_eq!(iso639_1("De"), Some(*b"de"));
+        // Region subtags are ignored — only the primary subtag matters.
+        assert_eq!(iso639_1("en-US"), Some(*b"en"));
+        assert_eq!(iso639_1("  fr  "), Some(*b"fr"));
+    }
+
+    #[test]
+    fn iso639_1_rejects_non_letter_codes() {
+        assert_eq!(iso639_1(""), None);
+        assert_eq!(iso639_1("x"), None);
+        assert_eq!(iso639_1("12"), None);
     }
 }

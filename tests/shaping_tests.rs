@@ -169,12 +169,12 @@ fn shape_with_buffer_recycling() {
 
     let buffer = harfrust::UnicodeBuffer::new();
     let (run1, buffer) =
-        shape_text_with_buffer(ts.font_registry(), &resolved, "Hello", 0, buffer).unwrap();
+        shape_text_with_buffer(ts.font_registry(), &resolved, "Hello", 0, buffer, &[]).unwrap();
     assert_eq!(run1.glyphs.len(), 5);
 
     // Reuse the recycled buffer for a second shaping call
     let (run2, _buffer) =
-        shape_text_with_buffer(ts.font_registry(), &resolved, "World", 0, buffer).unwrap();
+        shape_text_with_buffer(ts.font_registry(), &resolved, "World", 0, buffer, &[]).unwrap();
     assert_eq!(run2.glyphs.len(), 5);
 
     // Both runs should have identical advance structure (same font, same length)
@@ -238,11 +238,79 @@ fn shape_rtl_text_produces_glyphs() {
         "שלום",
         0,
         TextDirection::RightToLeft,
+        &[],
     );
     assert!(run.is_some(), "shaping RTL text should succeed");
     let run = run.unwrap();
     assert!(!run.glyphs.is_empty(), "RTL text should produce glyphs");
     assert!(run.advance_width > 0.0);
+}
+
+#[test]
+fn cached_shaper_data_yields_identical_glyphs() {
+    // ShaperData is built once per face and cached on the FontEntry.
+    // Re-shaping the same face must produce byte-identical glyph output
+    // (the cache is a pure speedup, not a behavior change).
+    let ts = make_typesetter();
+    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+
+    let first = shape_text(ts.font_registry(), &resolved, "Cached shaping", 0).unwrap();
+    // Second call hits the cached ShaperData on the same FontEntry.
+    let second = shape_text(ts.font_registry(), &resolved, "Cached shaping", 0).unwrap();
+
+    assert_eq!(first.glyphs.len(), second.glyphs.len());
+    for (a, b) in first.glyphs.iter().zip(second.glyphs.iter()) {
+        assert_eq!(a.glyph_id, b.glyph_id);
+        assert_eq!(a.cluster, b.cluster);
+        assert!((a.x_advance - b.x_advance).abs() < f32::EPSILON);
+    }
+    assert!((first.advance_width - second.advance_width).abs() < f32::EPSILON);
+}
+
+// ── OpenType feature tests ──────────────────────────────────────
+
+#[test]
+fn opentype_features_reach_the_shaper() {
+    use text_typeset::FontFeature;
+    use text_typeset::shaping::shaper::{TextDirection, shape_text_directed, to_harfrust_features};
+
+    let ts = make_typesetter();
+    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+
+    // Standard ligatures off vs on. NotoSans ligates "fi"; with `liga`
+    // disabled it stays two glyphs, with it enabled it collapses to one.
+    let off = to_harfrust_features(&[FontFeature::off(*b"liga")]);
+    let on = to_harfrust_features(&[FontFeature::on(*b"liga")]);
+
+    let run_off = shape_text_directed(
+        ts.font_registry(),
+        &resolved,
+        "fi",
+        0,
+        TextDirection::LeftToRight,
+        &off,
+    )
+    .unwrap();
+    let run_on = shape_text_directed(
+        ts.font_registry(),
+        &resolved,
+        "fi",
+        0,
+        TextDirection::LeftToRight,
+        &on,
+    )
+    .unwrap();
+
+    assert_eq!(
+        run_off.glyphs.len(),
+        2,
+        "liga=0 should keep 'fi' as two glyphs"
+    );
+    assert_eq!(
+        run_on.glyphs.len(),
+        1,
+        "liga=1 should ligate 'fi' into one glyph"
+    );
 }
 
 // ── Glyph fallback tests ────────────────────────────────────────

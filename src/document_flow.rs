@@ -48,10 +48,12 @@ use crate::layout::block::BlockLayoutParams;
 use crate::layout::flow::{FlowItem, FlowLayout};
 use crate::layout::frame::FrameLayoutParams;
 use crate::layout::inline_markup::{InlineAttrs, InlineMarkup};
-use crate::layout::paragraph::{Alignment, break_into_lines};
+use crate::layout::paragraph::{Alignment, Hyphenator, break_into_lines};
 use crate::layout::table::TableLayoutParams;
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
-use crate::shaping::shaper::{bidi_runs, font_metrics_px, shape_text, shape_text_with_fallback};
+use crate::shaping::shaper::{
+    bidi_runs, font_metrics_px, shape_text, shape_text_with_fallback, to_harfrust_features,
+};
 use crate::types::{
     BlockVisualInfo, CharacterGeometry, CursorDisplay, DecorationKind, DecorationRect, GlyphQuad,
     HitTestResult, LaidOutSpan, LaidOutSpanKind, ParagraphResult, RenderFrame, SingleLineResult,
@@ -152,6 +154,12 @@ pub struct DocumentFlow {
     /// verbatim. Threaded into the bridge via [`crate::bridge::BridgeOptions::echo_char`]
     /// from `layout_full`. See [`set_echo_char`](Self::set_echo_char).
     echo_char: Option<char>,
+    /// Auto-hyphenate justified blocks that don't set `hyphenate`
+    /// explicitly. Threaded into the bridge via
+    /// [`crate::bridge::BridgeOptions::hyphenate_justified`] from
+    /// `layout_full`. Enable on prose surfaces only. `false` by default.
+    /// See [`set_hyphenate_justified`](Self::set_hyphenate_justified).
+    hyphenate_justified: bool,
     cursors: Vec<CursorDisplay>,
     zoom: f32,
     rendered_zoom: f32,
@@ -186,6 +194,7 @@ impl DocumentFlow {
             code_block_background: [0.95, 0.95, 0.95, 1.0],
             code_block_foreground: None,
             echo_char: None,
+            hyphenate_justified: false,
             cursors: Vec::new(),
             zoom: 1.0,
             rendered_zoom: f32::NAN,
@@ -347,6 +356,7 @@ impl DocumentFlow {
             code_block_background: self.code_block_background,
             code_block_foreground: self.code_block_foreground,
             echo_char: self.echo_char,
+            hyphenate_justified: self.hyphenate_justified,
         };
         let converted = convert_flow_with(flow, &opts);
 
@@ -863,6 +873,7 @@ impl DocumentFlow {
         let line_height = metrics.ascent + metrics.descent + metrics.leading;
         let baseline = metrics.ascent;
 
+        let features = to_harfrust_features(&format.features);
         let runs: Vec<_> = bidi_runs(text)
             .into_iter()
             .filter_map(|br| {
@@ -873,6 +884,7 @@ impl DocumentFlow {
                     slice,
                     br.byte_range.start,
                     br.direction,
+                    &features,
                 )
             })
             .collect();
@@ -1007,6 +1019,7 @@ impl DocumentFlow {
             None => return empty,
         };
 
+        let features = to_harfrust_features(&format.features);
         let runs: Vec<_> = bidi_runs(text)
             .into_iter()
             .filter_map(|br| {
@@ -1017,6 +1030,7 @@ impl DocumentFlow {
                     slice,
                     br.byte_range.start,
                     br.direction,
+                    &features,
                 )
             })
             .collect();
@@ -1025,7 +1039,23 @@ impl DocumentFlow {
             return empty;
         }
 
-        let lines = break_into_lines(runs, text, max_width, Alignment::Left, 0.0, &metrics);
+        let hyphenator = format.hyphenation.and_then(|h| {
+            shape_text(&service.font_registry, &resolved, "-", 0)
+                .and_then(|r| r.glyphs.into_iter().next())
+                .map(|glyph| Hyphenator {
+                    glyph,
+                    language: h.language,
+                })
+        });
+        let lines = break_into_lines(
+            runs,
+            text,
+            max_width,
+            Alignment::Left,
+            0.0,
+            &metrics,
+            hyphenator,
+        );
 
         let line_count = match max_lines {
             Some(n) => lines.len().min(n),
@@ -1286,6 +1316,7 @@ impl DocumentFlow {
             };
 
             let flat_start = span_flat_offsets[span_idx];
+            let features = to_harfrust_features(&fmt.features);
             for br in bidi_runs(&sp.text) {
                 let slice = match sp.text.get(br.byte_range.clone()) {
                     Some(s) => s,
@@ -1297,6 +1328,7 @@ impl DocumentFlow {
                     slice,
                     flat_start + br.byte_range.start,
                     br.direction,
+                    &features,
                 ) else {
                     continue;
                 };
@@ -1312,7 +1344,23 @@ impl DocumentFlow {
             return empty;
         }
 
-        let lines = break_into_lines(all_runs, &flat, max_width, Alignment::Left, 0.0, &metrics);
+        let hyphenator = format.hyphenation.and_then(|h| {
+            shape_text(&service.font_registry, &base_resolved, "-", 0)
+                .and_then(|r| r.glyphs.into_iter().next())
+                .map(|glyph| Hyphenator {
+                    glyph,
+                    language: h.language,
+                })
+        });
+        let lines = break_into_lines(
+            all_runs,
+            &flat,
+            max_width,
+            Alignment::Left,
+            0.0,
+            &metrics,
+            hyphenator,
+        );
 
         let line_count = match max_lines {
             Some(n) => lines.len().min(n),
@@ -1544,6 +1592,19 @@ impl DocumentFlow {
     /// Current code-block background default.
     pub fn code_block_background(&self) -> [f32; 4] {
         self.code_block_background
+    }
+
+    /// Auto-hyphenate justified blocks (that don't set `hyphenate`
+    /// explicitly) on future `layout_full` / `relayout_block` calls.
+    /// Enable on prose/rich-text surfaces; leave off for single-line or
+    /// label widgets. Default `false`.
+    pub fn set_hyphenate_justified(&mut self, enabled: bool) {
+        self.hyphenate_justified = enabled;
+    }
+
+    /// Whether justified blocks are auto-hyphenated.
+    pub fn hyphenate_justified(&self) -> bool {
+        self.hyphenate_justified
     }
 
     /// Set the foreground used for monospaced runs (inline `code`,
@@ -1839,7 +1900,8 @@ mod tests {
     const NOTO_SANS: &[u8] = include_bytes!("../test-fonts/NotoSans-Variable.ttf");
 
     fn service() -> TextFontService {
-        let mut s = TextFontService::new();
+        // Hermetic: don't pull in the host machine's fonts.
+        let mut s = TextFontService::new_without_system_fonts();
         let face = s.register_font(NOTO_SANS);
         s.set_default_font(face, 16.0);
         s
@@ -1874,6 +1936,7 @@ mod tests {
                 image_name: None,
                 image_width: 0.0,
                 image_height: 0.0,
+                features: Vec::new(),
             }],
             alignment: Alignment::Left,
             top_margin: 0.0,
@@ -1886,6 +1949,7 @@ mod tests {
             tab_positions: vec![],
             line_height_multiplier: None,
             non_breakable_lines: false,
+            hyphenation: None,
             checkbox: None,
             background_color: None,
         }

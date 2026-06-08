@@ -13,6 +13,9 @@ use text_typeset::{
 };
 
 pub const NOTO_SANS: &[u8] = include_bytes!("../test-fonts/NotoSans-Variable.ttf");
+pub const NOTO_ARABIC: &[u8] = include_bytes!("../test-fonts/NotoSansArabic-Regular.ttf");
+pub const NOTO_HEBREW: &[u8] = include_bytes!("../test-fonts/NotoSansHebrew-Regular.ttf");
+pub const NOTO_DEVANAGARI: &[u8] = include_bytes!("../test-fonts/NotoSansDevanagari-Regular.ttf");
 
 // ── Rect type ───────────────────────────────────────────────────
 
@@ -272,7 +275,10 @@ pub struct Typesetter {
 impl Typesetter {
     pub fn new() -> Self {
         Self {
-            service: TextFontService::new(),
+            // Hermetic: tests must not depend on the host machine's
+            // installed fonts. System-font behavior is covered explicitly
+            // in system_font_tests.rs.
+            service: TextFontService::new_without_system_fonts(),
             flow: DocumentFlow::new(),
         }
     }
@@ -548,6 +554,7 @@ pub fn make_block_at(id: usize, position: usize, text: &str) -> BlockLayoutParam
             image_name: None,
             image_width: 0.0,
             image_height: 0.0,
+            features: Vec::new(),
         }],
         alignment: Alignment::Left,
         top_margin: 0.0,
@@ -560,6 +567,7 @@ pub fn make_block_at(id: usize, position: usize, text: &str) -> BlockLayoutParam
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     }

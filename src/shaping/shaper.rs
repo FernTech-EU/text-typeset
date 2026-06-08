@@ -1,8 +1,19 @@
-use harfrust::{Direction, FontRef, ShaperData, UnicodeBuffer};
+use harfrust::{Direction, Feature, FontRef, ShapeOptions, Tag, UnicodeBuffer};
 
 use crate::font::registry::FontRegistry;
 use crate::font::resolve::ResolvedFont;
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
+use crate::types::FontFeature;
+
+/// Convert public [`FontFeature`] toggles into harfrust [`Feature`]s,
+/// applied across the whole shaped string (global range). Script-mandated
+/// features apply regardless; these are the discretionary toggles.
+pub fn to_harfrust_features(features: &[FontFeature]) -> Vec<Feature> {
+    features
+        .iter()
+        .map(|f| Feature::new(Tag::new(&f.tag), f.value, ..))
+        .collect()
+}
 
 /// Read units-per-em for a font face.
 ///
@@ -44,7 +55,14 @@ pub fn shape_text(
     text: &str,
     text_offset: usize,
 ) -> Option<ShapedRun> {
-    shape_text_with_fallback(registry, resolved, text, text_offset, TextDirection::Auto)
+    shape_text_with_fallback(
+        registry,
+        resolved,
+        text,
+        text_offset,
+        TextDirection::Auto,
+        &[],
+    )
 }
 
 /// Shape text with an explicit direction and glyph fallback.
@@ -58,12 +76,13 @@ pub fn shape_text_with_fallback(
     text: &str,
     text_offset: usize,
     direction: TextDirection,
+    features: &[Feature],
 ) -> Option<ShapedRun> {
-    let mut run = shape_text_directed(registry, resolved, text, text_offset, direction)?;
+    let mut run = shape_text_directed(registry, resolved, text, text_offset, direction, features)?;
 
     // Check for .notdef glyphs and attempt fallback
     if run.glyphs.iter().any(|g| g.glyph_id == 0) && !text.is_empty() {
-        apply_glyph_fallback(registry, resolved, text, text_offset, &mut run);
+        apply_glyph_fallback(registry, resolved, text, text_offset, features, &mut run);
     }
 
     Some(run)
@@ -80,6 +99,7 @@ fn apply_glyph_fallback(
     primary: &ResolvedFont,
     text: &str,
     text_offset: usize,
+    features: &[Feature],
     run: &mut ShapedRun,
 ) {
     use crate::font::resolve::find_fallback_font;
@@ -124,6 +144,7 @@ fn apply_glyph_fallback(
             char_str,
             text_offset + byte_offset,
             TextDirection::Auto,
+            features,
         ) {
             // Replace the .notdef glyph with the fallback glyph(s)
             if let Some(fb_glyph) = fallback_run.glyphs.first() {
@@ -148,6 +169,7 @@ pub fn shape_text_directed(
     text: &str,
     text_offset: usize,
     direction: TextDirection,
+    features: &[Feature],
 ) -> Option<ShapedRun> {
     let entry = registry.get(resolved.font_face_id)?;
     let font = FontRef::from_index(entry.bytes(), entry.face_index).ok()?;
@@ -173,12 +195,20 @@ pub fn shape_text_directed(
         TextDirection::Auto => buffer.guess_segment_properties(),
     }
 
-    // ShaperData preprocesses font tables for shaping. For one-shot
-    // shape calls we build it inline; a future optimisation can cache
-    // it per `FontFaceId` if profiling shows it matters.
-    let shaper_data = ShaperData::new(&font);
+    // Resolve the concrete direction (Auto is now decided by the buffer).
+    // Stored on the run so hit-testing knows RTL glyph order.
+    let resolved_direction = if buffer.direction() == Direction::RightToLeft {
+        TextDirection::RightToLeft
+    } else {
+        TextDirection::LeftToRight
+    };
+
+    // ShaperData preprocesses font tables for shaping. It's built once
+    // per face and cached on the FontEntry, so repeated shape calls
+    // (every relayout/keystroke) reuse the same preprocessed tables.
+    let shaper_data = entry.shaper_data(&font);
     let shaper = shaper_data.shaper(&font).build();
-    let glyph_buffer = shaper.shape(buffer, &[]);
+    let glyph_buffer = shaper.shape(buffer, ShapeOptions::new().features(features));
 
     let infos = glyph_buffer.glyph_infos();
     let positions = glyph_buffer.glyph_positions();
@@ -212,6 +242,7 @@ pub fn shape_text_directed(
         glyphs,
         advance_width: total_advance,
         text_range: text_offset..text_offset + text.len(),
+        direction: resolved_direction,
         underline_style: crate::types::UnderlineStyle::None,
         overline: false,
         strikeout: false,
@@ -234,6 +265,7 @@ pub fn shape_text_with_buffer(
     text: &str,
     text_offset: usize,
     buffer: UnicodeBuffer,
+    features: &[Feature],
 ) -> Option<(ShapedRun, UnicodeBuffer)> {
     let entry = registry.get(resolved.font_face_id)?;
     let font = FontRef::from_index(entry.bytes(), entry.face_index).ok()?;
@@ -253,9 +285,15 @@ pub fn shape_text_with_buffer(
     // guess them so harfrust doesn't panic on Direction::Invalid.
     buffer.guess_segment_properties();
 
-    let shaper_data = ShaperData::new(&font);
+    let resolved_direction = if buffer.direction() == Direction::RightToLeft {
+        TextDirection::RightToLeft
+    } else {
+        TextDirection::LeftToRight
+    };
+
+    let shaper_data = entry.shaper_data(&font);
     let shaper = shaper_data.shaper(&font).build();
-    let glyph_buffer = shaper.shape(buffer, &[]);
+    let glyph_buffer = shaper.shape(buffer, ShapeOptions::new().features(features));
 
     let infos = glyph_buffer.glyph_infos();
     let positions = glyph_buffer.glyph_positions();
@@ -289,6 +327,7 @@ pub fn shape_text_with_buffer(
         glyphs,
         advance_width: total_advance,
         text_range: text_offset..text_offset + text.len(),
+        direction: resolved_direction,
         underline_style: crate::types::UnderlineStyle::None,
         overline: false,
         strikeout: false,

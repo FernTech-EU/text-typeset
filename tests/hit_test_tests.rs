@@ -610,6 +610,7 @@ fn hit_test_link_region_detected() {
             image_name: None,
             image_width: 0.0,
             image_height: 0.0,
+            features: Vec::new(),
         }],
         alignment: Alignment::Left,
         top_margin: 0.0,
@@ -622,6 +623,7 @@ fn hit_test_link_region_detected() {
         tab_positions: vec![],
         line_height_multiplier: None,
         non_breakable_lines: false,
+        hyphenation: None,
         checkbox: None,
         background_color: None,
     };

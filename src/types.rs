@@ -294,6 +294,71 @@ pub struct BlockVisualInfo {
     pub height: f32,
 }
 
+// ── OpenType features ───────────────────────────────────────────
+
+/// An OpenType feature toggle applied during shaping.
+///
+/// `tag` is the 4-byte feature tag (e.g. `*b"liga"`, `*b"smcp"`,
+/// `*b"tnum"`, `*b"ss01"`); `value` is the feature value — `0` disables
+/// it, `1` enables it, and some features (e.g. `aalt`) take an index.
+///
+/// Script-mandated features (Arabic joining, Indic reordering, etc.)
+/// always apply regardless of this list; these toggles control the
+/// *discretionary* typographic features a caller wants on or off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FontFeature {
+    /// The 4-byte OpenType feature tag.
+    pub tag: [u8; 4],
+    /// Feature value: `0` = off, `1` = on, or a feature-specific index.
+    pub value: u32,
+}
+
+impl FontFeature {
+    /// A feature tag turned on (`value = 1`).
+    pub const fn on(tag: [u8; 4]) -> Self {
+        Self { tag, value: 1 }
+    }
+
+    /// A feature tag turned off (`value = 0`).
+    pub const fn off(tag: [u8; 4]) -> Self {
+        Self { tag, value: 0 }
+    }
+
+    /// A feature tag with an explicit value.
+    pub const fn new(tag: [u8; 4], value: u32) -> Self {
+        Self { tag, value }
+    }
+}
+
+/// Hyphenation settings for line wrapping.
+///
+/// Presence (`Some`) enables hyphenation; the `language` selects the
+/// Knuth-Liang dictionary. Soft hyphens (U+00AD) always break and render a
+/// hyphen when enabled, regardless of language; dictionary hyphenation
+/// applies only when the language's patterns are compiled in (otherwise it
+/// silently falls back to soft-hyphen-only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hyphenation {
+    /// ISO 639-1 language code, e.g. `*b"en"`, `*b"fr"`, `*b"de"`.
+    pub language: [u8; 2],
+}
+
+impl Hyphenation {
+    /// Hyphenation in the given ISO 639-1 language.
+    pub const fn new(language: [u8; 2]) -> Self {
+        Self { language }
+    }
+
+    /// English hyphenation (`en`).
+    pub const ENGLISH: Self = Self { language: *b"en" };
+}
+
+impl Default for Hyphenation {
+    fn default() -> Self {
+        Self::ENGLISH
+    }
+}
+
 // ── Single-line API ────────────────────────────────────────────
 
 /// Text formatting parameters for the single-line layout API.
@@ -316,6 +381,13 @@ pub struct TextFormat {
     pub font_size: Option<f32>,
     /// Text color (RGBA, 0.0-1.0). None means use the typesetter's text color.
     pub color: Option<[f32; 4]>,
+    /// Discretionary OpenType features to toggle during shaping (ligatures,
+    /// small caps, tabular numerals, stylistic sets, …). Empty = font defaults.
+    pub features: Vec<FontFeature>,
+    /// Hyphenation (Knuth-Liang dictionary + soft-hyphen breaks) for line
+    /// wrapping. `None` = disabled (default); most useful for justified
+    /// prose. See [`Hyphenation`].
+    pub hyphenation: Option<Hyphenation>,
 }
 
 /// Result of [`crate::DocumentFlow::layout_single_line`].
