@@ -11,6 +11,7 @@ pub struct GlyphImage {
     pub is_color: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn rasterize_glyph(
     scale_context: &mut ScaleContext,
     font_data: &[u8],
@@ -19,6 +20,7 @@ pub fn rasterize_glyph(
     glyph_id: u16,
     size_px: f32,
     font_weight: u32,
+    hinted: bool,
 ) -> Option<GlyphImage> {
     let base = FontRef::from_index(font_data, face_index as usize)?;
     let font_ref = FontRef {
@@ -30,10 +32,15 @@ pub fn rasterize_glyph(
     // Always set the wght variation axis explicitly so the scaler
     // gets deterministic state regardless of ScaleContext reuse
     // history.  For non-variable fonts this is a harmless no-op.
+    //
+    // `hinted` is false when rasterizing under a raster scale (zoomed
+    // content): glyph positions come from shaping at the *logical*
+    // ppem, and hinting at a different physical ppem would grid-snap
+    // stems inconsistently with those positions.
     let mut scaler = scale_context
         .builder(font_ref)
         .size(size_px)
-        .hint(true)
+        .hint(hinted)
         .variations(&[("wght", font_weight as f32)])
         .build();
 

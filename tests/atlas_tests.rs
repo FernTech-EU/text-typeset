@@ -195,6 +195,7 @@ mod rasterizer {
             glyph_id,
             16.0,
             400,
+            true,
         );
 
         assert!(image.is_some(), "rasterization should succeed for 'A'");
@@ -222,6 +223,7 @@ mod rasterizer {
             glyph_id,
             24.0,
             400,
+            true,
         )
         .unwrap();
 
@@ -254,6 +256,7 @@ mod rasterizer {
             glyph_id,
             12.0,
             400,
+            true,
         )
         .unwrap();
         let large = rasterize_glyph(
@@ -264,6 +267,7 @@ mod rasterizer {
             glyph_id,
             48.0,
             400,
+            true,
         )
         .unwrap();
 
@@ -295,6 +299,7 @@ mod rasterizer {
             glyph_id,
             16.0,
             400,
+            true,
         );
 
         // Space may rasterize to None (no outline) or to an empty image
@@ -375,6 +380,101 @@ mod cache {
 
         assert!(cache.get(&key_16).is_some());
         assert!(cache.get(&key_24).is_none());
+    }
+
+    #[test]
+    fn pressure_eviction_recovers_space_for_new_allocations() {
+        use text_typeset::atlas::allocate_or_evict;
+        use text_typeset::atlas::allocator::GlyphAtlas;
+
+        // Fill the atlas to its size cap with 500x500 slots (the atlas
+        // grows to 4096² on demand, then allocation fails).
+        let mut atlas = GlyphAtlas::new();
+        let mut cache = GlyphCache::new();
+        let mut glyph_id: u16 = 0;
+        let mut keys = Vec::new();
+        while let Some(alloc) = atlas.allocate(500, 500) {
+            let key = GlyphCacheKey::new(FontFaceId(0), glyph_id, 16.0);
+            let rect = alloc.rectangle;
+            cache.insert(
+                key,
+                CachedGlyph {
+                    alloc_id: alloc.id,
+                    atlas_x: rect.min.x as u32,
+                    atlas_y: rect.min.y as u32,
+                    width: 500,
+                    height: 500,
+                    placement_left: 0,
+                    placement_top: 0,
+                    is_color: false,
+                    last_used: 0,
+                },
+            );
+            keys.push(key);
+            glyph_id += 1;
+        }
+        assert!(keys.len() > 8, "expected the atlas to hold many slots");
+        assert!(atlas.allocate(500, 500).is_none(), "atlas must be full");
+
+        // New frame: only the first two glyphs are still in use.
+        cache.advance_generation();
+        cache.touch(&keys[..2]);
+
+        let (alloc, evicted) = allocate_or_evict(&mut atlas, &mut cache, 500, 500);
+        assert!(evicted, "pressure eviction must fire on a full atlas");
+        assert!(
+            alloc.is_some(),
+            "the freed space must satisfy the failed allocation"
+        );
+        assert_eq!(
+            cache.len(),
+            2,
+            "glyphs touched this generation must survive pressure eviction"
+        );
+        assert!(cache.peek(&keys[0]).is_some());
+        assert!(cache.peek(&keys[1]).is_some());
+        assert!(cache.peek(&keys[2]).is_none());
+    }
+
+    #[test]
+    fn pressure_eviction_spares_full_atlas_of_current_glyphs() {
+        use text_typeset::atlas::allocate_or_evict;
+        use text_typeset::atlas::allocator::GlyphAtlas;
+
+        // Same fill, but every glyph is in use this generation — nothing
+        // may be evicted and the allocation still fails (caller falls
+        // back to dropping the glyph, as before).
+        let mut atlas = GlyphAtlas::new();
+        let mut cache = GlyphCache::new();
+        let mut glyph_id: u16 = 0;
+        let mut keys = Vec::new();
+        while let Some(alloc) = atlas.allocate(500, 500) {
+            let key = GlyphCacheKey::new(FontFaceId(0), glyph_id, 16.0);
+            let rect = alloc.rectangle;
+            cache.insert(
+                key,
+                CachedGlyph {
+                    alloc_id: alloc.id,
+                    atlas_x: rect.min.x as u32,
+                    atlas_y: rect.min.y as u32,
+                    width: 500,
+                    height: 500,
+                    placement_left: 0,
+                    placement_top: 0,
+                    is_color: false,
+                    last_used: 0,
+                },
+            );
+            keys.push(key);
+            glyph_id += 1;
+        }
+        let total = keys.len();
+        cache.touch(&keys); // everything used in the current generation
+
+        let (alloc, evicted) = allocate_or_evict(&mut atlas, &mut cache, 500, 500);
+        assert!(!evicted, "in-use glyphs must never be pressure-evicted");
+        assert!(alloc.is_none());
+        assert_eq!(cache.len(), total);
     }
 
     #[test]

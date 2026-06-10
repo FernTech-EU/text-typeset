@@ -270,6 +270,10 @@ pub fn assert_caret_is_real(rect: [f32; 4], label: &str) {
 pub struct Typesetter {
     pub service: TextFontService,
     pub flow: DocumentFlow,
+    /// Raster densification used by the label-path `layout_*` wrappers.
+    /// `1.0` by default; set via [`Self::set_raster_scale`], which also
+    /// forwards to the flow for the document render path.
+    pub raster_scale: f32,
 }
 
 impl Typesetter {
@@ -280,6 +284,7 @@ impl Typesetter {
             // in system_font_tests.rs.
             service: TextFontService::new_without_system_fonts(),
             flow: DocumentFlow::new(),
+            raster_scale: 1.0,
         }
     }
 
@@ -361,6 +366,10 @@ impl Typesetter {
     pub fn zoom(&self) -> f32 {
         self.flow.zoom()
     }
+    pub fn set_raster_scale(&mut self, raster_scale: f32) {
+        self.raster_scale = raster_scale;
+        self.flow.set_raster_scale(raster_scale);
+    }
 
     // ── Layout ──
     #[cfg(feature = "text-document")]
@@ -406,7 +415,7 @@ impl Typesetter {
         max_width: Option<f32>,
     ) -> SingleLineResult {
         self.flow
-            .layout_single_line(&mut self.service, text, format, max_width)
+            .layout_single_line(&mut self.service, text, format, max_width, self.raster_scale)
     }
     pub fn layout_paragraph(
         &mut self,
@@ -415,8 +424,14 @@ impl Typesetter {
         max_width: f32,
         max_lines: Option<usize>,
     ) -> ParagraphResult {
-        self.flow
-            .layout_paragraph(&mut self.service, text, format, max_width, max_lines)
+        self.flow.layout_paragraph(
+            &mut self.service,
+            text,
+            format,
+            max_width,
+            max_lines,
+            self.raster_scale,
+        )
     }
     pub fn layout_single_line_markup(
         &mut self,
@@ -424,8 +439,13 @@ impl Typesetter {
         format: &TextFormat,
         max_width: Option<f32>,
     ) -> SingleLineResult {
-        self.flow
-            .layout_single_line_markup(&mut self.service, markup, format, max_width)
+        self.flow.layout_single_line_markup(
+            &mut self.service,
+            markup,
+            format,
+            max_width,
+            self.raster_scale,
+        )
     }
     pub fn layout_paragraph_markup(
         &mut self,
@@ -434,8 +454,14 @@ impl Typesetter {
         max_width: f32,
         max_lines: Option<usize>,
     ) -> ParagraphResult {
-        self.flow
-            .layout_paragraph_markup(&mut self.service, markup, format, max_width, max_lines)
+        self.flow.layout_paragraph_markup(
+            &mut self.service,
+            markup,
+            format,
+            max_width,
+            max_lines,
+            self.raster_scale,
+        )
     }
 
     // ── Hit testing & geometry ──

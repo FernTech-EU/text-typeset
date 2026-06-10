@@ -13,6 +13,12 @@ use crate::types::{CursorDisplay, GlyphQuad, ImageQuad, RenderFrame};
 ///
 /// Iterates visible blocks (viewport culling), rasterizes uncached glyphs
 /// into the atlas, and produces GlyphQuad entries for each visible glyph.
+///
+/// `raster_scale` densifies glyph bitmaps for content drawn under a scale
+/// transform (`1.0` for unscaled UI): rasterization happens at
+/// `size × scale_factor × raster_scale` physical pixels while glyph
+/// `screen` rects stay in logical pixels — layout is identical at every
+/// raster scale. Scaled rasters are unhinted.
 #[allow(clippy::too_many_arguments)]
 pub fn build_render_frame(
     flow: &FlowLayout,
@@ -27,6 +33,7 @@ pub fn build_render_frame(
     cursor_color: [f32; 4],
     selection_color: [f32; 4],
     text_color: [f32; 4],
+    raster_scale: f32,
     render_frame: &mut RenderFrame,
     eviction_epoch: &mut u64,
 ) {
@@ -94,8 +101,10 @@ pub fn build_render_frame(
                         viewport_height,
                         text_color,
                         scale_factor,
+                        raster_scale,
                         render_frame,
                         &mut key_buf,
+                        eviction_epoch,
                     );
                     let table_g: Vec<GlyphQuad> = render_frame.glyphs[g_start..].to_vec();
                     let table_i: Vec<ImageQuad> = render_frame.images[i_start..].to_vec();
@@ -133,8 +142,10 @@ pub fn build_render_frame(
                         viewport_height,
                         text_color,
                         scale_factor,
+                        raster_scale,
                         render_frame,
                         &mut key_buf,
+                        eviction_epoch,
                     );
                     let frame_g: Vec<GlyphQuad> = render_frame.glyphs[g_start..].to_vec();
                     let frame_i: Vec<ImageQuad> = render_frame.images[i_start..].to_vec();
@@ -169,8 +180,10 @@ pub fn build_render_frame(
                 viewport_height,
                 text_color,
                 scale_factor,
+                raster_scale,
                 render_frame,
                 &mut key_buf,
+                eviction_epoch,
             );
             let block_g: Vec<GlyphQuad> = render_frame.glyphs[g_start..].to_vec();
             let block_i: Vec<ImageQuad> = render_frame.images[i_start..].to_vec();
@@ -243,8 +256,10 @@ pub(crate) fn render_block_at_offset(
     viewport_height: f32,
     default_text_color: [f32; 4],
     scale_factor: f32,
+    raster_scale: f32,
     render_frame: &mut RenderFrame,
     glyph_keys: &mut Vec<GlyphCacheKey>,
+    eviction_epoch: &mut u64,
 ) {
     // Render list marker on the first line (if present)
     if let Some(marker) = &block.list_marker
@@ -264,8 +279,10 @@ pub(crate) fn render_block_at_offset(
                 scroll_offset,
                 default_text_color,
                 scale_factor,
+                raster_scale,
                 render_frame,
                 glyph_keys,
+                eviction_epoch,
             );
         }
     }
@@ -317,8 +334,10 @@ pub(crate) fn render_block_at_offset(
                 scroll_offset,
                 default_text_color,
                 scale_factor,
+                raster_scale,
                 render_frame,
                 glyph_keys,
+                eviction_epoch,
             );
         }
     }
@@ -341,8 +360,10 @@ fn render_table_cells(
     viewport_height: f32,
     default_text_color: [f32; 4],
     scale_factor: f32,
+    raster_scale: f32,
     render_frame: &mut RenderFrame,
     glyph_keys: &mut Vec<GlyphCacheKey>,
+    eviction_epoch: &mut u64,
 ) {
     for cell in &table.cell_layouts {
         if cell.row >= table.row_ys.len() || cell.column >= table.column_xs.len() {
@@ -364,8 +385,10 @@ fn render_table_cells(
                 viewport_height,
                 default_text_color,
                 scale_factor,
+                raster_scale,
                 render_frame,
                 glyph_keys,
+                eviction_epoch,
             );
             let cell_w = table
                 .column_content_widths
@@ -399,8 +422,10 @@ fn render_frame_layout(
     viewport_height: f32,
     default_text_color: [f32; 4],
     scale_factor: f32,
+    raster_scale: f32,
     render_frame: &mut RenderFrame,
     glyph_keys: &mut Vec<GlyphCacheKey>,
+    eviction_epoch: &mut u64,
 ) {
     let offset_x = frame.x + frame.content_x;
     let offset_y = frame.y + frame.content_y;
@@ -419,8 +444,10 @@ fn render_frame_layout(
             viewport_height,
             default_text_color,
             scale_factor,
+            raster_scale,
             render_frame,
             glyph_keys,
+            eviction_epoch,
         );
         let decos = generate_block_decorations(
             block,
@@ -450,8 +477,10 @@ fn render_frame_layout(
             viewport_height,
             default_text_color,
             scale_factor,
+            raster_scale,
             render_frame,
             glyph_keys,
+            eviction_epoch,
         );
     }
 
@@ -471,8 +500,10 @@ fn render_frame_layout(
             viewport_height,
             default_text_color,
             scale_factor,
+            raster_scale,
             render_frame,
             glyph_keys,
+            eviction_epoch,
         );
     }
 
@@ -556,8 +587,10 @@ fn render_nested_frame(
     viewport_height: f32,
     default_text_color: [f32; 4],
     scale_factor: f32,
+    raster_scale: f32,
     render_frame: &mut RenderFrame,
     glyph_keys: &mut Vec<GlyphCacheKey>,
+    eviction_epoch: &mut u64,
 ) {
     let frame_x = parent_x + nested.x;
     let frame_y = parent_y + nested.y;
@@ -578,8 +611,10 @@ fn render_nested_frame(
             viewport_height,
             default_text_color,
             scale_factor,
+            raster_scale,
             render_frame,
             glyph_keys,
+            eviction_epoch,
         );
         let decos = generate_block_decorations(
             block,
@@ -609,8 +644,10 @@ fn render_nested_frame(
             viewport_height,
             default_text_color,
             scale_factor,
+            raster_scale,
             render_frame,
             glyph_keys,
+            eviction_epoch,
         );
     }
 
@@ -628,8 +665,10 @@ fn render_nested_frame(
             viewport_height,
             default_text_color,
             scale_factor,
+            raster_scale,
             render_frame,
             glyph_keys,
+            eviction_epoch,
         );
     }
 
@@ -670,14 +709,21 @@ fn render_run_glyphs(
     scroll_offset: f32,
     default_text_color: [f32; 4],
     scale_factor: f32,
+    raster_scale: f32,
     render_frame: &mut RenderFrame,
     glyph_keys: &mut Vec<GlyphCacheKey>,
+    eviction_epoch: &mut u64,
 ) {
     // Rasterize at physical ppem; the cache key uses the physical size so
-    // different scale_factors never collide.
+    // different scale_factors never collide. `raster_scale` densifies the
+    // bitmap only — positions come from shaping at the logical ppem, so
+    // scaled rasters are unhinted (the `hinted` key bit keeps them from
+    // colliding with a hinted glyph of the same physical size).
+    let raster_scale = if raster_scale > 0.0 { raster_scale } else { 1.0 };
+    let hinted = raster_scale == 1.0;
     let sf = scale_factor.max(f32::MIN_POSITIVE);
-    let inv_sf = 1.0 / sf;
-    let physical_size_px = run.size_px * sf;
+    let inv_total = 1.0 / (sf * raster_scale);
+    let physical_size_px = run.size_px * sf * raster_scale;
 
     let mut pen_x = start_x;
     for glyph in &run.glyphs {
@@ -700,6 +746,7 @@ fn render_run_glyphs(
             glyph.glyph_id,
             physical_size_px,
             run.weight as u32,
+            hinted,
         );
         ensure_glyph_cached(
             &cache_key,
@@ -711,16 +758,17 @@ fn render_run_glyphs(
             entry.swash_cache_key,
             physical_size_px,
             run.weight as u32,
+            eviction_epoch,
         );
         if let Some(cached) = cache.get(&cache_key) {
             glyph_keys.push(cache_key);
             // CachedGlyph stores physical dims; convert to logical for the
             // quad's screen rect. The atlas rect stays physical (it's the
             // actual texture sub-region).
-            let logical_w = cached.width as f32 * inv_sf;
-            let logical_h = cached.height as f32 * inv_sf;
-            let logical_left = cached.placement_left as f32 * inv_sf;
-            let logical_top = cached.placement_top as f32 * inv_sf;
+            let logical_w = cached.width as f32 * inv_total;
+            let logical_h = cached.height as f32 * inv_total;
+            let logical_left = cached.placement_left as f32 * inv_total;
+            let logical_top = cached.placement_top as f32 * inv_total;
             let screen_x = pen_x + glyph.x_offset + logical_left;
             let screen_y = baseline_y - glyph.y_offset - logical_top - scroll_offset;
             let color = if cached.is_color {
@@ -745,6 +793,10 @@ fn render_run_glyphs(
 }
 
 /// Ensure a glyph is in the cache and atlas. Rasterizes on cache miss.
+///
+/// The raster honours the key's `hinted` bit, and a full atlas triggers
+/// emergency eviction of not-this-generation glyphs (bumping
+/// `eviction_epoch`) before the glyph is given up on.
 #[allow(clippy::too_many_arguments)]
 fn ensure_glyph_cached(
     key: &GlyphCacheKey,
@@ -756,6 +808,7 @@ fn ensure_glyph_cached(
     swash_cache_key: swash::CacheKey,
     size_px: f32,
     font_weight: u32,
+    eviction_epoch: &mut u64,
 ) {
     if cache.peek(key).is_some() {
         return;
@@ -769,6 +822,7 @@ fn ensure_glyph_cached(
         key.glyph_id,
         size_px,
         font_weight,
+        key.hinted,
     ) {
         Some(img) => img,
         None => return,
@@ -778,7 +832,12 @@ fn ensure_glyph_cached(
         return;
     }
 
-    let alloc = match atlas.allocate(image.width, image.height) {
+    let (alloc, evicted) =
+        crate::atlas::allocate_or_evict(atlas, cache, image.width, image.height);
+    if evicted {
+        *eviction_epoch = eviction_epoch.wrapping_add(1);
+    }
+    let alloc = match alloc {
         Some(a) => a,
         None => return,
     };

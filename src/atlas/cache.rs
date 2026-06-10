@@ -4,7 +4,7 @@ use etagere::AllocId;
 
 use crate::types::FontFaceId;
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct GlyphCacheKey {
     pub font_face_id: FontFaceId,
     pub glyph_id: u16,
@@ -13,6 +13,12 @@ pub struct GlyphCacheKey {
     /// Bold produce separate cache entries even though they share the
     /// same `font_face_id` and `glyph_id` in a variable font.
     pub weight: u32,
+    /// Whether the bitmap was rasterized with hinting. Rasters produced
+    /// under a raster scale (zoomed content) are unhinted, and the same
+    /// *physical* size can be reached both ways — 7px at raster_scale 2
+    /// and 14px at raster_scale 1 share `size_bits` but must not share
+    /// a bitmap.
+    pub hinted: bool,
 }
 
 impl GlyphCacheKey {
@@ -22,15 +28,23 @@ impl GlyphCacheKey {
             glyph_id,
             size_bits: size_px.to_bits(),
             weight: 400,
+            hinted: true,
         }
     }
 
-    pub fn with_weight(font_face_id: FontFaceId, glyph_id: u16, size_px: f32, weight: u32) -> Self {
+    pub fn with_weight(
+        font_face_id: FontFaceId,
+        glyph_id: u16,
+        size_px: f32,
+        weight: u32,
+        hinted: bool,
+    ) -> Self {
         Self {
             font_face_id,
             glyph_id,
             size_bits: size_px.to_bits(),
             weight,
+            hinted,
         }
     }
 }
@@ -141,6 +155,37 @@ impl GlyphCache {
 
         self.entries.retain(|_key, glyph| {
             if glyph.last_used < threshold {
+                evicted.push(EvictedGlyph {
+                    alloc_id: glyph.alloc_id,
+                    atlas_x: glyph.atlas_x,
+                    atlas_y: glyph.atlas_y,
+                    width: glyph.width,
+                    height: glyph.height,
+                });
+                false
+            } else {
+                true
+            }
+        });
+
+        evicted
+    }
+
+    /// Emergency eviction when the atlas is full: drop every glyph not
+    /// used in the *current* generation, regardless of the idle window.
+    ///
+    /// Unlike [`evict_unused`](Self::evict_unused) this runs
+    /// unconditionally (no every-60-generations gate) — it is only
+    /// called when an allocation has already failed at the atlas size
+    /// cap, where the alternative is silently dropping the new glyph.
+    /// Glyphs touched this generation are still referenced by quads in
+    /// the frame being built and must survive.
+    pub fn evict_for_pressure(&mut self) -> Vec<EvictedGlyph> {
+        let current = self.generation;
+        let mut evicted = Vec::new();
+
+        self.entries.retain(|_key, glyph| {
+            if glyph.last_used < current {
                 evicted.push(EvictedGlyph {
                     alloc_id: glyph.alloc_id,
                     atlas_x: glyph.atlas_x,

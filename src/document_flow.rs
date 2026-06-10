@@ -163,6 +163,16 @@ pub struct DocumentFlow {
     cursors: Vec<CursorDisplay>,
     zoom: f32,
     rendered_zoom: f32,
+    /// Raster densification for content drawn under a scale transform.
+    /// `1.0` = unscaled UI. Rasterization happens at
+    /// `size × scale_factor × raster_scale` physical pixels while layout
+    /// and glyph `screen` rects stay in logical pixels. Unlike `zoom`
+    /// (a post-layout coordinate transform) this changes which bitmaps
+    /// the quads sample, so the incremental `render_block_only` path
+    /// falls back to a full render when it changed. See
+    /// [`set_raster_scale`](Self::set_raster_scale).
+    raster_scale: f32,
+    rendered_raster_scale: f32,
     /// `TextFontService::scale_generation` at the time of the last
     /// `layout_*` call. Used by
     /// [`layout_dirty_for_scale`](DocumentFlow::layout_dirty_for_scale)
@@ -198,6 +208,8 @@ impl DocumentFlow {
             cursors: Vec::new(),
             zoom: 1.0,
             rendered_zoom: f32::NAN,
+            raster_scale: 1.0,
+            rendered_raster_scale: f32::NAN,
             layout_scale_generation: 0,
             has_layout: false,
         }
@@ -315,6 +327,28 @@ impl DocumentFlow {
     /// Current display zoom level.
     pub fn zoom(&self) -> f32 {
         self.zoom
+    }
+
+    /// Set the raster densification scale for content drawn under a
+    /// scale transform (a zoomed scene viewport).
+    ///
+    /// Orthogonal to [`set_zoom`](Self::set_zoom): zoom multiplies the
+    /// emitted screen coordinates, `raster_scale` only changes the
+    /// physical ppem glyphs are rasterized at — layout, metrics, and
+    /// `screen` rects are identical at every raster scale, so no
+    /// relayout is needed after changing it. The next [`render`]
+    /// (Self::render) rasterizes missing glyphs at the new density;
+    /// old-density entries age out of the atlas via the normal LRU.
+    /// Scaled rasters (`!= 1.0`) are unhinted.
+    ///
+    /// Clamped to `0.1..=16.0`. Default is `1.0`.
+    pub fn set_raster_scale(&mut self, raster_scale: f32) {
+        self.raster_scale = raster_scale.clamp(0.1, 16.0);
+    }
+
+    /// Current raster densification scale.
+    pub fn raster_scale(&self) -> f32 {
+        self.raster_scale
     }
 
     // ── Scale factor sync ───────────────────────────────────────
@@ -537,11 +571,13 @@ impl DocumentFlow {
             self.cursor_color,
             self.selection_color,
             self.text_color,
+            self.raster_scale,
             &mut self.render_frame,
             &mut service.eviction_epoch,
         );
         self.rendered_scroll_offset = self.scroll_offset;
         self.rendered_zoom = self.zoom;
+        self.rendered_raster_scale = self.raster_scale;
         apply_zoom(&mut self.render_frame, self.zoom);
         &self.render_frame
     }
@@ -565,6 +601,7 @@ impl DocumentFlow {
     ) -> &RenderFrame {
         if (self.scroll_offset - self.rendered_scroll_offset).abs() > 0.001
             || (self.zoom - self.rendered_zoom).abs() > 0.001
+            || (self.raster_scale - self.rendered_raster_scale).abs() > 0.001
         {
             return self.render(service);
         }
@@ -630,8 +667,10 @@ impl DocumentFlow {
                 effective_vh,
                 self.text_color,
                 scale_factor,
+                self.raster_scale,
                 &mut tmp,
                 &mut new_keys,
+                &mut service.eviction_epoch,
             );
             new_glyphs = tmp.glyphs;
             new_images = tmp.images;
@@ -830,12 +869,19 @@ impl DocumentFlow {
     /// If `max_width` is set and the shaped text exceeds it, the
     /// output is truncated with an ellipsis character. Glyph quads
     /// are positioned with the top-left at `(0, 0)`.
+    ///
+    /// `raster_scale` densifies glyph bitmaps for content drawn under
+    /// a scale transform (pass `1.0` for unscaled UI): rasterization
+    /// happens at `size × scale_factor × raster_scale` physical pixels
+    /// while every returned metric and `screen` rect stays in logical
+    /// pixels — layout is identical at every raster scale.
     pub fn layout_single_line(
         &mut self,
         service: &mut TextFontService,
         text: &str,
         format: &TextFormat,
         max_width: Option<f32>,
+        raster_scale: f32,
     ) -> SingleLineResult {
         let empty = SingleLineResult {
             width: 0.0,
@@ -937,7 +983,15 @@ impl DocumentFlow {
                     break 'emit;
                 }
                 rasterize_glyph_quad(
-                    service, glyph, run, pen_x, baseline, text_color, &mut quads, &mut keys,
+                    service,
+                    glyph,
+                    run,
+                    pen_x,
+                    baseline,
+                    text_color,
+                    raster_scale,
+                    &mut quads,
+                    &mut keys,
                 );
                 pen_x += glyph.x_advance;
                 emitted += 1;
@@ -947,7 +1001,15 @@ impl DocumentFlow {
         if let Some(ref e_run) = ellipsis_run {
             for glyph in &e_run.glyphs {
                 rasterize_glyph_quad(
-                    service, glyph, e_run, pen_x, baseline, text_color, &mut quads, &mut keys,
+                    service,
+                    glyph,
+                    e_run,
+                    pen_x,
+                    baseline,
+                    text_color,
+                    raster_scale,
+                    &mut quads,
+                    &mut keys,
                 );
                 pen_x += glyph.x_advance;
             }
@@ -975,6 +1037,9 @@ impl DocumentFlow {
     ///
     /// If `max_lines` is `Some(n)`, at most `n` lines are emitted
     /// and any remainder is silently dropped.
+    ///
+    /// See [`layout_single_line`](Self::layout_single_line) for the
+    /// `raster_scale` contract (pass `1.0` for unscaled UI).
     pub fn layout_paragraph(
         &mut self,
         service: &mut TextFontService,
@@ -982,6 +1047,7 @@ impl DocumentFlow {
         format: &TextFormat,
         max_width: f32,
         max_lines: Option<usize>,
+        raster_scale: f32,
     ) -> ParagraphResult {
         let empty = ParagraphResult {
             width: 0.0,
@@ -1079,7 +1145,14 @@ impl DocumentFlow {
                 let run_copy = run.shaped_run.clone();
                 for glyph in &run_copy.glyphs {
                     rasterize_glyph_quad(
-                        service, glyph, &run_copy, pen_x, baseline_y, text_color, &mut quads,
+                        service,
+                        glyph,
+                        &run_copy,
+                        pen_x,
+                        baseline_y,
+                        text_color,
+                        raster_scale,
+                        &mut quads,
                         &mut keys,
                     );
                     pen_x += glyph.x_advance;
@@ -1114,6 +1187,7 @@ impl DocumentFlow {
         markup: &InlineMarkup,
         format: &TextFormat,
         max_width: Option<f32>,
+        raster_scale: f32,
     ) -> SingleLineResult {
         if markup.spans.is_empty() {
             return SingleLineResult {
@@ -1145,7 +1219,7 @@ impl DocumentFlow {
                         spans: Vec::new(),
                     }
                 } else {
-                    self.layout_single_line(service, &sp.text, &fmt, None)
+                    self.layout_single_line(service, &sp.text, &fmt, None, raster_scale)
                 };
                 (r, sp)
             })
@@ -1250,6 +1324,7 @@ impl DocumentFlow {
         format: &TextFormat,
         max_width: f32,
         max_lines: Option<usize>,
+        raster_scale: f32,
     ) -> ParagraphResult {
         let empty = ParagraphResult {
             width: 0.0,
@@ -1393,6 +1468,7 @@ impl DocumentFlow {
                         pen_x,
                         baseline_y,
                         text_color,
+                        raster_scale,
                         &mut glyphs_out,
                         &mut keys_out,
                     );
@@ -1735,6 +1811,14 @@ enum FlowItemKind {
 /// `GlyphQuad` to the output vec. Shared between
 /// [`DocumentFlow::layout_single_line`] and
 /// [`DocumentFlow::layout_paragraph`] (plus the markup variants).
+///
+/// `raster_scale` densifies the bitmap without touching layout: the
+/// glyph is rasterized at `size × scale_factor × raster_scale`
+/// physical pixels while the emitted `screen` rect stays in logical
+/// pixels (divided by the *total* scale), so content drawn under a
+/// scale transform (scene zoom) samples a matching-resolution bitmap
+/// instead of stretching a 1× raster. Scaled rasters are unhinted —
+/// glyph positions come from shaping at the logical ppem.
 #[allow(clippy::too_many_arguments)]
 fn rasterize_glyph_quad(
     service: &mut TextFontService,
@@ -1743,6 +1827,7 @@ fn rasterize_glyph_quad(
     pen_x: f32,
     baseline: f32,
     text_color: [f32; 4],
+    raster_scale: f32,
     quads: &mut Vec<GlyphQuad>,
     glyph_keys: &mut Vec<crate::atlas::cache::GlyphCacheKey>,
 ) {
@@ -1758,14 +1843,17 @@ fn rasterize_glyph_quad(
         None => return,
     };
 
+    let raster_scale = if raster_scale > 0.0 { raster_scale } else { 1.0 };
+    let hinted = raster_scale == 1.0;
     let sf = service.scale_factor.max(f32::MIN_POSITIVE);
-    let inv_sf = 1.0 / sf;
-    let physical_size_px = run.size_px * sf;
+    let inv_total = 1.0 / (sf * raster_scale);
+    let physical_size_px = run.size_px * sf * raster_scale;
     let cache_key = GlyphCacheKey::with_weight(
         glyph.font_face_id,
         glyph.glyph_id,
         physical_size_px,
         run.weight as u32,
+        hinted,
     );
 
     if service.glyph_cache.peek(&cache_key).is_none()
@@ -1777,44 +1865,55 @@ fn rasterize_glyph_quad(
             glyph.glyph_id,
             physical_size_px,
             run.weight as u32,
+            hinted,
         )
         && image.width > 0
         && image.height > 0
-        && let Some(alloc) = service.atlas.allocate(image.width, image.height)
     {
-        let rect = alloc.rectangle;
-        let atlas_x = rect.min.x as u32;
-        let atlas_y = rect.min.y as u32;
-        if image.is_color {
-            service
-                .atlas
-                .blit_rgba(atlas_x, atlas_y, image.width, image.height, &image.data);
-        } else {
-            service
-                .atlas
-                .blit_mask(atlas_x, atlas_y, image.width, image.height, &image.data);
-        }
-        service.glyph_cache.insert(
-            cache_key,
-            crate::atlas::cache::CachedGlyph {
-                alloc_id: alloc.id,
-                atlas_x,
-                atlas_y,
-                width: image.width,
-                height: image.height,
-                placement_left: image.placement_left,
-                placement_top: image.placement_top,
-                is_color: image.is_color,
-                last_used: 0,
-            },
+        let (alloc, evicted) = crate::atlas::allocate_or_evict(
+            &mut service.atlas,
+            &mut service.glyph_cache,
+            image.width,
+            image.height,
         );
+        if evicted {
+            service.eviction_epoch = service.eviction_epoch.wrapping_add(1);
+        }
+        if let Some(alloc) = alloc {
+            let rect = alloc.rectangle;
+            let atlas_x = rect.min.x as u32;
+            let atlas_y = rect.min.y as u32;
+            if image.is_color {
+                service
+                    .atlas
+                    .blit_rgba(atlas_x, atlas_y, image.width, image.height, &image.data);
+            } else {
+                service
+                    .atlas
+                    .blit_mask(atlas_x, atlas_y, image.width, image.height, &image.data);
+            }
+            service.glyph_cache.insert(
+                cache_key,
+                crate::atlas::cache::CachedGlyph {
+                    alloc_id: alloc.id,
+                    atlas_x,
+                    atlas_y,
+                    width: image.width,
+                    height: image.height,
+                    placement_left: image.placement_left,
+                    placement_top: image.placement_top,
+                    is_color: image.is_color,
+                    last_used: 0,
+                },
+            );
+        }
     }
 
     if let Some(cached) = service.glyph_cache.get(&cache_key) {
-        let logical_w = cached.width as f32 * inv_sf;
-        let logical_h = cached.height as f32 * inv_sf;
-        let logical_left = cached.placement_left as f32 * inv_sf;
-        let logical_top = cached.placement_top as f32 * inv_sf;
+        let logical_w = cached.width as f32 * inv_total;
+        let logical_h = cached.height as f32 * inv_total;
+        let logical_left = cached.placement_left as f32 * inv_total;
+        let logical_top = cached.placement_top as f32 * inv_total;
         let screen_x = pen_x + glyph.x_offset + logical_left;
         let screen_y = baseline - glyph.y_offset - logical_top;
         let color = if cached.is_color {
