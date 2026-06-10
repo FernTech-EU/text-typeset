@@ -53,6 +53,8 @@ jobs:
     timeout-minutes: 15
     environment:
       name: release
+    permissions:
+      id-token: write
     # Skip for pre-release tags
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
@@ -68,10 +70,14 @@ jobs:
       - name: Strip path dependencies
         uses: ./.github/actions/strip-path-deps
 
+      - name: Auth for trusted publishing on crates.io
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
       - name: Publish crates to crates.io
         run: cargo publish --workspace --allow-dirty
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   # Create the GitHub release
   release:
