@@ -2617,3 +2617,35 @@ fn zoom_render_block_only_scales_output() {
     }
     assert_no_glyph_overlap(frame);
 }
+
+#[test]
+fn build_render_frame_evictions_bump_epoch() {
+    // Regression test for the silent eviction path: `build_render_frame`
+    // (the start of every full `render()`) advances the glyph-cache
+    // generation and evicts stale glyphs, bumping ONLY the service's
+    // eviction epoch — `atlas_snapshot` is never involved, so its
+    // `glyphs_evicted` flag never fires for these evictions. Frameworks
+    // must therefore watch the epoch; this test pins down that the epoch
+    // actually moves on the render-only path.
+    let mut ts = make_typesetter();
+    ts.layout_blocks(vec![make_block(1, "AAAA")]);
+    let _ = ts.render();
+    let epoch_before = ts.eviction_epoch();
+
+    // Replace the block content so the 'A' glyph is no longer touched by
+    // subsequent renders, then render past the LRU idle window (120
+    // generations) plus the eviction-scan cadence (60). Every render
+    // advances the generation via build_render_frame; atlas_snapshot is
+    // never called.
+    ts.layout_blocks(vec![make_block(1, "zzzz")]);
+    for _ in 0..250 {
+        let _ = ts.render();
+    }
+
+    assert!(
+        ts.eviction_epoch() > epoch_before,
+        "evictions inside build_render_frame must bump the eviction epoch \
+         (before: {epoch_before}, after: {})",
+        ts.eviction_epoch()
+    );
+}

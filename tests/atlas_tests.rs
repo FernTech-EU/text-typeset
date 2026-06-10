@@ -125,6 +125,49 @@ mod allocator {
             "free space should not decrease after deallocation"
         );
     }
+
+    #[test]
+    fn poison_fill_marks_atlas_dirty_and_writes_magenta() {
+        let mut atlas = GlyphAtlas::new();
+        atlas.dirty = false;
+
+        atlas.debug_poison_rect(2, 3, 4, 4);
+
+        assert!(atlas.dirty, "poison fill must mark the atlas dirty");
+        // Inside the rect: solid magenta.
+        for (x, y) in [(2u32, 3u32), (5, 3), (2, 6), (5, 6)] {
+            let i = ((y * atlas.width + x) * 4) as usize;
+            assert_eq!(
+                &atlas.pixels[i..i + 4],
+                &[255, 0, 255, 255],
+                "pixel ({x},{y}) inside the poisoned rect must be magenta"
+            );
+        }
+        // Outside the rect: untouched (zeroed).
+        for (x, y) in [(1u32, 3u32), (6, 3), (2, 2), (2, 7)] {
+            let i = ((y * atlas.width + x) * 4) as usize;
+            assert_eq!(
+                &atlas.pixels[i..i + 4],
+                &[0, 0, 0, 0],
+                "pixel ({x},{y}) outside the poisoned rect must be untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn poison_fill_clamps_to_atlas_bounds() {
+        let mut atlas = GlyphAtlas::new();
+        let (w, h) = (atlas.width, atlas.height);
+        // Rect extending past both edges must not panic.
+        atlas.debug_poison_rect(w - 2, h - 2, 10, 10);
+        let i = (((h - 1) * w + (w - 1)) * 4) as usize;
+        assert_eq!(&atlas.pixels[i..i + 4], &[255, 0, 255, 255]);
+        // Fully out-of-bounds rect is a no-op.
+        let mut atlas2 = GlyphAtlas::new();
+        atlas2.dirty = false;
+        atlas2.debug_poison_rect(w + 5, h + 5, 4, 4);
+        assert!(!atlas2.dirty);
+    }
 }
 
 // ── Rasterizer tests ────────────────────────────────────────────
@@ -362,6 +405,40 @@ mod cache {
         let evicted = cache.evict_unused();
         assert_eq!(evicted.len(), 1, "should evict one stale glyph");
         assert_eq!(cache.len(), 0, "cache should be empty after eviction");
+    }
+
+    #[test]
+    fn evict_unused_returns_evicted_rects() {
+        let mut cache = GlyphCache::new();
+        let key = GlyphCacheKey::new(FontFaceId(0), 7, 16.0);
+        cache.insert(
+            key,
+            CachedGlyph {
+                alloc_id: etagere::AllocId::deserialize(3),
+                atlas_x: 10,
+                atlas_y: 20,
+                width: 8,
+                height: 12,
+                placement_left: 0,
+                placement_top: 0,
+                is_color: false,
+                last_used: 0,
+            },
+        );
+
+        for _ in 0..200 {
+            cache.advance_generation();
+        }
+
+        let evicted = cache.evict_unused();
+        assert_eq!(evicted.len(), 1);
+        let glyph = &evicted[0];
+        assert_eq!(glyph.alloc_id, etagere::AllocId::deserialize(3));
+        assert_eq!(
+            (glyph.atlas_x, glyph.atlas_y, glyph.width, glyph.height),
+            (10, 20, 8, 12),
+            "evicted entry must carry the atlas rect it occupied (for debug poison fill)"
+        );
     }
 
     #[test]

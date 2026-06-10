@@ -85,6 +85,29 @@ impl GlyphAtlas {
         self.dirty = true;
     }
 
+    /// Fill a rectangle with solid magenta and mark the atlas dirty.
+    ///
+    /// Debug-build aid: called (under `cfg(debug_assertions)`) for every
+    /// rectangle freed by glyph eviction, so any consumer still sampling
+    /// the freed region — i.e. a retained quad whose UVs were never
+    /// invalidated — renders unmissable magenta blocks instead of subtly
+    /// wrong glyphs. Always compiled so tests can exercise it directly.
+    pub fn debug_poison_rect(&mut self, x: u32, y: u32, w: u32, h: u32) {
+        const POISON: [u8; 4] = [255, 0, 255, 255];
+        let w = w.min(self.width.saturating_sub(x));
+        let h = h.min(self.height.saturating_sub(y));
+        for row in 0..h {
+            let dst_start = ((y + row) * self.width + x) as usize * 4;
+            for col in 0..w as usize {
+                let dst = dst_start + col * 4;
+                self.pixels[dst..dst + 4].copy_from_slice(&POISON);
+            }
+        }
+        if w > 0 && h > 0 {
+            self.dirty = true;
+        }
+    }
+
     /// Blit a single-channel alpha mask into the atlas as white RGBA.
     pub fn blit_mask(&mut self, x: u32, y: u32, w: u32, h: u32, data: &[u8]) {
         for row in 0..h {

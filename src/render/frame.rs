@@ -41,14 +41,21 @@ pub fn build_render_frame(
     render_frame.block_glyph_keys.clear();
     render_frame.glyph_keys.clear();
 
-    // Advance generation and evict stale glyphs
+    // Advance generation and evict stale glyphs. The epoch bump is the
+    // only externally visible trace of this eviction path — frameworks
+    // retaining glyph quads across frames must watch
+    // `TextFontService::eviction_epoch`, not just
+    // `AtlasSnapshot::glyphs_evicted` (which reports only the
+    // snapshot-driven evictions).
     cache.advance_generation();
     let evicted = cache.evict_unused();
     if !evicted.is_empty() {
         *eviction_epoch = eviction_epoch.wrapping_add(1);
     }
-    for alloc_id in evicted {
-        atlas.deallocate(alloc_id);
+    for glyph in evicted {
+        atlas.deallocate(glyph.alloc_id);
+        #[cfg(debug_assertions)]
+        atlas.debug_poison_rect(glyph.atlas_x, glyph.atlas_y, glyph.width, glyph.height);
     }
 
     let view_top = scroll_offset;

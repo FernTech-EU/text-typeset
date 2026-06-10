@@ -48,6 +48,20 @@ pub struct CachedGlyph {
     pub last_used: u64,
 }
 
+/// A glyph removed by [`GlyphCache::evict_unused`]: the allocator id to
+/// deallocate plus the atlas rectangle the glyph occupied. Consumers that
+/// retain glyph quads across frames (paint caches) key their invalidation
+/// off the eviction; the rect lets debug builds poison-fill freed pixels
+/// so stale-UV sampling is visually unmistakable.
+#[derive(Clone, Copy, Debug)]
+pub struct EvictedGlyph {
+    pub alloc_id: AllocId,
+    pub atlas_x: u32,
+    pub atlas_y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Glyph cache with LRU eviction.
 ///
 /// Tracks a frame generation counter. Each `get` marks the glyph as used
@@ -107,10 +121,15 @@ impl GlyphCache {
     }
 
     /// Evict glyphs unused for MAX_IDLE_FRAMES generations.
-    /// Returns the AllocIds that should be deallocated from the atlas.
+    /// Returns the evicted entries — each carries the `AllocId` to
+    /// deallocate from the atlas plus the atlas rectangle it occupied
+    /// (the bucketed allocator cannot resolve a rectangle from an
+    /// `AllocId` after the fact, so the rect is captured here, before
+    /// the entry is dropped; debug builds use it to poison-fill the
+    /// freed pixels).
     /// Only runs the actual eviction scan every 60 calls (~1 second at 60fps)
     /// to avoid iterating the entire cache on every render.
-    pub fn evict_unused(&mut self) -> Vec<AllocId> {
+    pub fn evict_unused(&mut self) -> Vec<EvictedGlyph> {
         // Only scan every 60 generations (~1 second at 60fps)
         if self.generation - self.last_eviction_generation < 60 {
             return Vec::new();
@@ -122,7 +141,13 @@ impl GlyphCache {
 
         self.entries.retain(|_key, glyph| {
             if glyph.last_used < threshold {
-                evicted.push(glyph.alloc_id);
+                evicted.push(EvictedGlyph {
+                    alloc_id: glyph.alloc_id,
+                    atlas_x: glyph.atlas_x,
+                    atlas_y: glyph.atlas_y,
+                    width: glyph.width,
+                    height: glyph.height,
+                });
                 false
             } else {
                 true

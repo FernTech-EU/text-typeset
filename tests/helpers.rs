@@ -329,6 +329,9 @@ impl Typesetter {
     pub fn atlas_snapshot(&mut self, advance_generation: bool) -> AtlasSnapshot<'_> {
         self.service.atlas_snapshot(advance_generation)
     }
+    pub fn eviction_epoch(&self) -> u64 {
+        self.service.eviction_epoch()
+    }
 
     // ── Viewport / scroll / zoom (flow-side) ──
     pub fn set_viewport(&mut self, width: f32, height: f32) {

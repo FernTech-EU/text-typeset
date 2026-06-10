@@ -371,9 +371,16 @@ impl TextFontService {
     }
 
     /// Monotonic counter bumped every time the atlas drops entries —
-    /// LRU eviction triggered by [`atlas_snapshot`](Self::atlas_snapshot)
-    /// or wholesale reset by
+    /// LRU eviction triggered by [`atlas_snapshot`](Self::atlas_snapshot),
+    /// LRU eviction at the start of every full
+    /// [`render`](crate::DocumentFlow::render) (inside
+    /// `build_render_frame`), or wholesale reset by
     /// [`set_scale_factor`](Self::set_scale_factor).
+    ///
+    /// This is the single source of truth for "retained glyph quads may
+    /// be stale": frameworks should compare it against a last-seen value
+    /// once per frame and invalidate every retained paint cache when it
+    /// moves, regardless of which path moved it.
     ///
     /// Per-widget [`crate::DocumentFlow`]s stamp this value on every full
     /// [`render`](crate::DocumentFlow::render) and refuse to reuse
@@ -415,8 +422,15 @@ impl TextFontService {
             if glyphs_evicted {
                 self.eviction_epoch = self.eviction_epoch.wrapping_add(1);
             }
-            for alloc_id in evicted {
-                self.atlas.deallocate(alloc_id);
+            for glyph in evicted {
+                self.atlas.deallocate(glyph.alloc_id);
+                #[cfg(debug_assertions)]
+                self.atlas.debug_poison_rect(
+                    glyph.atlas_x,
+                    glyph.atlas_y,
+                    glyph.width,
+                    glyph.height,
+                );
             }
         }
 
@@ -442,6 +456,44 @@ impl TextFontService {
     /// is skipped.
     pub fn touch_glyphs(&mut self, keys: &[crate::atlas::cache::GlyphCacheKey]) {
         self.glyph_cache.touch(keys);
+    }
+
+    /// Current atlas rectangle (`[x, y, w, h]`, atlas pixel coordinates)
+    /// for a cached glyph, without refreshing its LRU timestamp.
+    ///
+    /// Returns `None` when the glyph is not (or no longer) resident.
+    /// Intended for debug-build validation of externally retained glyph
+    /// quads: a quad whose baked rect no longer matches the live rect is
+    /// sampling pixels that belong to another glyph.
+    pub fn peek_glyph_rect(
+        &self,
+        key: &crate::atlas::cache::GlyphCacheKey,
+    ) -> Option<[u32; 4]> {
+        self.glyph_cache
+            .peek(key)
+            .map(|g| [g.atlas_x, g.atlas_y, g.width, g.height])
+    }
+
+    /// Test hook: overwrite the atlas rectangle recorded for a cached
+    /// glyph. Lets corruption-detector tests simulate a glyph whose atlas
+    /// slot moved underneath a retained quad. Returns `false` when the
+    /// key is not resident.
+    #[doc(hidden)]
+    pub fn debug_set_glyph_rect(
+        &mut self,
+        key: &crate::atlas::cache::GlyphCacheKey,
+        rect: [u32; 4],
+    ) -> bool {
+        match self.glyph_cache.entries.get_mut(key) {
+            Some(glyph) => {
+                glyph.atlas_x = rect[0];
+                glyph.atlas_y = rect[1];
+                glyph.width = rect[2];
+                glyph.height = rect[3];
+                true
+            }
+            None => false,
+        }
     }
 
     /// True if the atlas has pending pixel changes since the last
