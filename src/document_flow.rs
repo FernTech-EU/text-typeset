@@ -336,8 +336,8 @@ impl DocumentFlow {
     /// emitted screen coordinates, `raster_scale` only changes the
     /// physical ppem glyphs are rasterized at — layout, metrics, and
     /// `screen` rects are identical at every raster scale, so no
-    /// relayout is needed after changing it. The next [`render`]
-    /// (Self::render) rasterizes missing glyphs at the new density;
+    /// relayout is needed after changing it. The next [`render`](Self::render)
+    /// rasterizes missing glyphs at the new density;
     /// old-density entries age out of the atlas via the normal LRU.
     /// Scaled rasters (`!= 1.0`) are unhinted.
     ///
@@ -1843,7 +1843,11 @@ fn rasterize_glyph_quad(
         None => return,
     };
 
-    let raster_scale = if raster_scale > 0.0 { raster_scale } else { 1.0 };
+    let raster_scale = if raster_scale > 0.0 {
+        raster_scale
+    } else {
+        1.0
+    };
     let hinted = raster_scale == 1.0;
     let sf = service.scale_factor.max(f32::MIN_POSITIVE);
     let inv_total = 1.0 / (sf * raster_scale);

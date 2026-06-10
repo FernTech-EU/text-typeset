@@ -414,8 +414,13 @@ impl Typesetter {
         format: &TextFormat,
         max_width: Option<f32>,
     ) -> SingleLineResult {
-        self.flow
-            .layout_single_line(&mut self.service, text, format, max_width, self.raster_scale)
+        self.flow.layout_single_line(
+            &mut self.service,
+            text,
+            format,
+            max_width,
+            self.raster_scale,
+        )
     }
     pub fn layout_paragraph(
         &mut self,

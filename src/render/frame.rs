@@ -719,7 +719,11 @@ fn render_run_glyphs(
     // bitmap only — positions come from shaping at the logical ppem, so
     // scaled rasters are unhinted (the `hinted` key bit keeps them from
     // colliding with a hinted glyph of the same physical size).
-    let raster_scale = if raster_scale > 0.0 { raster_scale } else { 1.0 };
+    let raster_scale = if raster_scale > 0.0 {
+        raster_scale
+    } else {
+        1.0
+    };
     let hinted = raster_scale == 1.0;
     let sf = scale_factor.max(f32::MIN_POSITIVE);
     let inv_total = 1.0 / (sf * raster_scale);
@@ -832,8 +836,7 @@ fn ensure_glyph_cached(
         return;
     }
 
-    let (alloc, evicted) =
-        crate::atlas::allocate_or_evict(atlas, cache, image.width, image.height);
+    let (alloc, evicted) = crate::atlas::allocate_or_evict(atlas, cache, image.width, image.height);
     if evicted {
         *eviction_epoch = eviction_epoch.wrapping_add(1);
     }

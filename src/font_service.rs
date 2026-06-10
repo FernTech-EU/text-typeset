@@ -465,10 +465,7 @@ impl TextFontService {
     /// Intended for debug-build validation of externally retained glyph
     /// quads: a quad whose baked rect no longer matches the live rect is
     /// sampling pixels that belong to another glyph.
-    pub fn peek_glyph_rect(
-        &self,
-        key: &crate::atlas::cache::GlyphCacheKey,
-    ) -> Option<[u32; 4]> {
+    pub fn peek_glyph_rect(&self, key: &crate::atlas::cache::GlyphCacheKey) -> Option<[u32; 4]> {
         self.glyph_cache
             .peek(key)
             .map(|g| [g.atlas_x, g.atlas_y, g.width, g.height])
