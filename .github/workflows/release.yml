@@ -51,6 +51,8 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment:
+      name: release
     # Skip for pre-release tags
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
