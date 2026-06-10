@@ -206,13 +206,15 @@ jobs:
       - name: Strip path dependencies
         uses: ./.github/actions/strip-path-deps
 
-      - name: Lint
+      - name: Lints
         run: cargo clippy --workspace --all-targets -- -D warnings -A deprecated
 
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment:
+      name: codecov
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -235,7 +237,7 @@ jobs:
         run: cargo llvm-cov --workspace --lcov --no-cfg-coverage --output-path lcov.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
