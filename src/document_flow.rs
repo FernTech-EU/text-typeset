@@ -823,6 +823,13 @@ impl DocumentFlow {
                 }
                 FlowItem::Frame { frame_id, .. } => {
                     if let Some(frame) = self.flow_layout.frames.get(frame_id) {
+                        crate::render::frame::append_frame_table_decorations(
+                            frame,
+                            0.0,
+                            0.0,
+                            self.scroll_offset,
+                            &mut self.render_frame.decorations,
+                        );
                         crate::render::frame::append_frame_border_decorations(
                             frame,
                             self.scroll_offset,

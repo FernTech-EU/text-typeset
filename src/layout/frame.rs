@@ -65,6 +65,23 @@ pub struct FrameLayoutParams {
     pub frames: Vec<(usize, FrameLayoutParams)>,
 }
 
+/// One direct child of a frame, in document (flow) order.
+///
+/// `FrameLayout` stores its children in per-kind vecs (`blocks`, `tables`,
+/// `frames`); this enum records how those vecs interleave in the source
+/// flow. Incremental relayout uses it to reposition children in document
+/// order — without it, re-stacking would group children by kind and
+/// visually reorder e.g. a blockquote containing [block, table, block].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameChildRef {
+    /// A direct block, identified by `block_id`.
+    Block(usize),
+    /// A direct table, identified by `table_id`.
+    Table(usize),
+    /// A nested frame, identified by `frame_id`.
+    Frame(usize),
+}
+
 /// Computed layout for a frame.
 pub struct FrameLayout {
     pub frame_id: usize,
@@ -79,6 +96,8 @@ pub struct FrameLayout {
     pub blocks: Vec<BlockLayout>,
     pub tables: Vec<TableLayout>,
     pub frames: Vec<FrameLayout>,
+    /// Direct children in document (flow) order — see [`FrameChildRef`].
+    pub flow_order: Vec<FrameChildRef>,
     pub border_width: f32,
     pub border_style: FrameBorderStyle,
 }
@@ -124,6 +143,7 @@ pub fn layout_frame(
     let mut blocks: Vec<BlockLayout> = Vec::with_capacity(params.blocks.len());
     let mut tables: Vec<TableLayout> = Vec::with_capacity(params.tables.len());
     let mut nested_frames: Vec<FrameLayout> = Vec::with_capacity(params.frames.len());
+    let mut flow_order: Vec<FrameChildRef> = Vec::with_capacity(ordered.len());
     let mut content_y = 0.0f32;
 
     for (_flow_idx, item) in &ordered {
@@ -133,12 +153,14 @@ pub fn layout_frame(
                 block.y = content_y + block.top_margin;
                 let block_content = block.height - block.top_margin - block.bottom_margin;
                 content_y = block.y + block_content + block.bottom_margin;
+                flow_order.push(FrameChildRef::Block(block.block_id));
                 blocks.push(block);
             }
             FlowItem::Table(table_params) => {
                 let mut table = layout_table(registry, table_params, content_width, scale_factor);
                 table.y = content_y;
                 content_y += table.total_height;
+                flow_order.push(FrameChildRef::Table(table.table_id));
                 tables.push(table);
             }
             FlowItem::Frame(frame_params) => {
@@ -146,6 +168,7 @@ pub fn layout_frame(
                 nested.y = content_y;
                 nested.x = 0.0;
                 content_y += nested.total_height;
+                flow_order.push(FrameChildRef::Frame(nested.frame_id));
                 nested_frames.push(nested);
             }
         }
@@ -178,6 +201,7 @@ pub fn layout_frame(
         blocks,
         tables,
         frames: nested_frames,
+        flow_order,
         border_width: border,
         border_style: params.border_style,
     }

@@ -507,8 +507,41 @@ fn render_frame_layout(
         );
     }
 
+    // Border + cell-background decorations for tables nested anywhere in
+    // this frame tree (recursive — render_nested_frame draws only cell
+    // content).
+    append_frame_table_decorations(frame, 0.0, 0.0, scroll_offset, &mut render_frame.decorations);
+
     // Frame border decorations
     append_frame_border_decorations(frame, scroll_offset, &mut render_frame.decorations);
+}
+
+/// Append table border/background decorations for every table nested in
+/// `frame` (at any depth), offset by the frame tree's content origins.
+///
+/// `parent_x`/`parent_y` follow the same convention as
+/// `render_nested_frame`: the parent frame's content origin, or `(0, 0)`
+/// for a top-level frame (whose `x`/`y` are already absolute).
+pub fn append_frame_table_decorations(
+    frame: &crate::layout::frame::FrameLayout,
+    parent_x: f32,
+    parent_y: f32,
+    scroll_offset: f32,
+    decorations: &mut Vec<crate::types::DecorationRect>,
+) {
+    let content_x = parent_x + frame.x + frame.content_x;
+    let content_y = parent_y + frame.y + frame.content_y;
+    for table in &frame.tables {
+        decorations.extend(crate::layout::table::generate_table_decorations_at(
+            table,
+            content_x,
+            content_y,
+            scroll_offset,
+        ));
+    }
+    for nested in &frame.frames {
+        append_frame_table_decorations(nested, content_x, content_y, scroll_offset, decorations);
+    }
 }
 
 /// Append frame border decoration rects to the given vec.
@@ -687,6 +720,7 @@ fn render_nested_frame(
         blocks: Vec::new(),
         tables: Vec::new(),
         frames: Vec::new(),
+        flow_order: Vec::new(),
         border_width: nested.border_width,
         border_style: nested.border_style,
     };

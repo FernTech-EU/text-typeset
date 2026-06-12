@@ -384,7 +384,11 @@ impl FlowLayout {
             None
         });
         if let Some((table_id, row, col)) = table_match {
+            let old_char_len = block_char_len(find_block_ref(self, block_id));
             self.relayout_table_block(registry, params, table_id, row, col);
+            let new_char_len = block_char_len(find_block_ref(self, block_id));
+            let char_delta = new_char_len as isize - old_char_len as isize;
+            self.shift_block_positions_after_table_block(table_id, block_id, char_delta);
             self.refresh_base_and_overlay_block(block_id);
             return;
         }
@@ -397,7 +401,11 @@ impl FlowLayout {
             None
         });
         if let Some(frame_id) = frame_match {
+            let old_char_len = block_char_len(find_block_ref(self, block_id));
             self.relayout_frame_block(registry, params, frame_id);
+            let new_char_len = block_char_len(find_block_ref(self, block_id));
+            let char_delta = new_char_len as isize - old_char_len as isize;
+            self.shift_block_positions_after_frame_block(frame_id, block_id, char_delta);
             self.refresh_base_and_overlay_block(block_id);
         }
     }
@@ -481,80 +489,8 @@ impl FlowLayout {
             None => return,
         };
 
-        let cell_width = table
-            .column_content_widths
-            .get(col)
-            .copied()
-            .unwrap_or(200.0);
         let old_table_height = table.total_height;
-
-        // Find the cell and replace the block
-        let cell = match table
-            .cell_layouts
-            .iter_mut()
-            .find(|c| c.row == row && c.column == col)
-        {
-            Some(c) => c,
-            None => return,
-        };
-
-        let new_block = layout_block(registry, params, cell_width, self.scale_factor);
-        if let Some(old) = cell
-            .blocks
-            .iter_mut()
-            .find(|b| b.block_id == params.block_id)
-        {
-            *old = new_block;
-        }
-
-        // Reposition blocks within the cell and recompute cell height
-        let mut block_y = 0.0f32;
-        for block in &mut cell.blocks {
-            block.y = block_y;
-            block_y += block.height;
-        }
-        let cell_height = block_y;
-
-        // Recompute row height by scanning all cells in this row
-        if row < table.row_heights.len() {
-            let mut max_h = 0.0f32;
-            for c in &table.cell_layouts {
-                if c.row == row {
-                    let h: f32 = c.blocks.iter().map(|b| b.height).sum();
-                    max_h = max_h.max(h);
-                }
-            }
-            // Also consider the cell we just updated
-            max_h = max_h.max(cell_height);
-            table.row_heights[row] = max_h;
-        }
-
-        // Recompute row y positions and total height
-        let border = table.border_width;
-        let padding = table.cell_padding;
-        let spacing = if table.row_ys.len() > 1 {
-            // Infer spacing from existing layout
-            if table.row_ys.len() >= 2 && !table.row_heights.is_empty() {
-                let expected = table.row_ys[0] + padding + table.row_heights[0] + padding;
-                (table.row_ys.get(1).copied().unwrap_or(expected) - expected).max(0.0)
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
-        let mut y = border;
-        for (r, &row_h) in table.row_heights.iter().enumerate() {
-            if r < table.row_ys.len() {
-                table.row_ys[r] = y + padding;
-            }
-            y += padding * 2.0 + row_h;
-            if r < table.row_heights.len() - 1 {
-                y += spacing;
-            }
-        }
-        table.total_height = y + border;
-
+        recompute_table_cell(table, registry, params, row, col, self.scale_factor);
         let delta = table.total_height - old_table_height;
 
         // Update flow_order entry for this table
@@ -574,25 +510,28 @@ impl FlowLayout {
         self.shift_items_after_table(table_id, delta);
     }
 
-    /// Relayout a block inside a frame. Recomputes frame content height
-    /// and propagates any height delta to subsequent flow items.
+    /// Relayout a block inside a frame. Handles direct blocks, blocks in
+    /// cells of frame-nested tables, and blocks in nested frames (any
+    /// depth). Recomputes frame content height and propagates any height
+    /// delta to subsequent flow items.
     fn relayout_frame_block(
         &mut self,
         registry: &FontRegistry,
         params: &BlockLayoutParams,
         frame_id: usize,
     ) {
-        let frame = match self.frames.get_mut(&frame_id) {
-            Some(f) => f,
+        let old_total_height = match self.frames.get(&frame_id) {
+            Some(f) => f.total_height,
             None => return,
         };
 
-        let old_total_height = frame.total_height;
-        let new_block = layout_block(registry, params, frame.content_width, self.scale_factor);
+        {
+            let frame = self.frames.get_mut(&frame_id).unwrap();
+            relayout_block_deep_in_frame(frame, registry, params, self.scale_factor);
+        }
 
-        relayout_block_in_frame(frame, params.block_id, new_block);
-
-        let delta = frame.total_height - old_total_height;
+        let new_total_height = self.frames[&frame_id].total_height;
+        let delta = new_total_height - old_total_height;
 
         for item in &mut self.flow_order {
             if let FlowItem::Frame {
@@ -602,7 +541,7 @@ impl FlowLayout {
             } = item
                 && *id == frame_id
             {
-                *height = frame.total_height;
+                *height = new_total_height;
                 break;
             }
         }
@@ -619,6 +558,12 @@ impl FlowLayout {
     /// relayout that changed the target block's char length (e.g. a cut or
     /// paste inside a non-last paragraph).
     fn shift_block_positions_after_block(&mut self, block_id: usize, char_delta: isize) {
+        self.shift_block_positions_after_flow_item(FlowItemRef::Block(block_id), char_delta);
+    }
+
+    /// Shift the document-character `position` of every block belonging to
+    /// a flow item that appears after `target` in flow order.
+    fn shift_block_positions_after_flow_item(&mut self, target: FlowItemRef, char_delta: isize) {
         if char_delta == 0 {
             return;
         }
@@ -635,27 +580,64 @@ impl FlowLayout {
             .collect();
         let mut found = false;
         for r in refs {
-            match r {
-                FlowItemRef::Block(id) => {
-                    if found && let Some(b) = self.blocks.get_mut(&id) {
-                        b.position = apply_char_delta(b.position, char_delta);
+            if found {
+                match r {
+                    FlowItemRef::Block(id) => {
+                        if let Some(b) = self.blocks.get_mut(&id) {
+                            b.position = apply_char_delta(b.position, char_delta);
+                        }
                     }
-                    if id == block_id {
-                        found = true;
+                    FlowItemRef::Table(id) => {
+                        if let Some(t) = self.tables.get_mut(&id) {
+                            shift_block_positions_in_table(t, char_delta);
+                        }
+                    }
+                    FlowItemRef::Frame(id) => {
+                        if let Some(f) = self.frames.get_mut(&id) {
+                            shift_block_positions_in_frame(f, char_delta);
+                        }
                     }
                 }
-                FlowItemRef::Table(id) => {
-                    if found && let Some(t) = self.tables.get_mut(&id) {
-                        shift_block_positions_in_table(t, char_delta);
-                    }
-                }
-                FlowItemRef::Frame(id) => {
-                    if found && let Some(f) = self.frames.get_mut(&id) {
-                        shift_block_positions_in_frame(f, char_delta);
-                    }
-                }
+            } else if r == target {
+                found = true;
             }
         }
+    }
+
+    /// Shift document positions after an edit inside a top-level table's
+    /// cell: cell blocks after the edited block within the table, then
+    /// every flow item after the table.
+    fn shift_block_positions_after_table_block(
+        &mut self,
+        table_id: usize,
+        block_id: usize,
+        char_delta: isize,
+    ) {
+        if char_delta == 0 {
+            return;
+        }
+        if let Some(table) = self.tables.get_mut(&table_id) {
+            shift_table_positions_after_block(table, block_id, char_delta);
+        }
+        self.shift_block_positions_after_flow_item(FlowItemRef::Table(table_id), char_delta);
+    }
+
+    /// Shift document positions after an edit inside a frame (any depth):
+    /// frame content after the edited block, then every flow item after
+    /// the frame.
+    fn shift_block_positions_after_frame_block(
+        &mut self,
+        frame_id: usize,
+        block_id: usize,
+        char_delta: isize,
+    ) {
+        if char_delta == 0 {
+            return;
+        }
+        if let Some(frame) = self.frames.get_mut(&frame_id) {
+            shift_frame_positions_after_block(frame, block_id, char_delta);
+        }
+        self.shift_block_positions_after_flow_item(FlowItemRef::Frame(frame_id), char_delta);
     }
 
     /// Shift all flow items after the given block by `delta` pixels.
@@ -831,6 +813,7 @@ impl FlowLayout {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum FlowItemRef {
     Block(usize),
     Table(usize),
@@ -871,6 +854,68 @@ fn shift_block_positions_in_frame(frame: &mut FrameLayout, delta: isize) {
     for nested in &mut frame.frames {
         shift_block_positions_in_frame(nested, delta);
     }
+}
+
+/// Shift the `position` of every cell block that comes after `block_id`
+/// within `table` (cells iterate in document/row-major order). Returns
+/// `true` when the edited block was found in this table.
+fn shift_table_positions_after_block(table: &mut TableLayout, block_id: usize, delta: isize) -> bool {
+    let mut found = false;
+    for cell in &mut table.cell_layouts {
+        for b in &mut cell.blocks {
+            if found {
+                b.position = apply_char_delta(b.position, delta);
+            } else if b.block_id == block_id {
+                found = true;
+            }
+        }
+    }
+    found
+}
+
+/// Shift the `position` of every block that comes after `block_id` in
+/// `frame`'s document order — walking `flow_order` so interleaved blocks,
+/// tables, and nested frames shift correctly. Returns `true` when the
+/// edited block was found in this frame tree.
+fn shift_frame_positions_after_block(
+    frame: &mut FrameLayout,
+    block_id: usize,
+    delta: isize,
+) -> bool {
+    let order = frame.flow_order.clone();
+    let mut found = false;
+    for child in &order {
+        match child {
+            crate::layout::frame::FrameChildRef::Block(bid) => {
+                if found {
+                    if let Some(b) = frame.blocks.iter_mut().find(|b| b.block_id == *bid) {
+                        b.position = apply_char_delta(b.position, delta);
+                    }
+                } else if *bid == block_id {
+                    found = true;
+                }
+            }
+            crate::layout::frame::FrameChildRef::Table(tid) => {
+                if let Some(t) = frame.tables.iter_mut().find(|t| t.table_id == *tid) {
+                    if found {
+                        shift_block_positions_in_table(t, delta);
+                    } else {
+                        found = shift_table_positions_after_block(t, block_id, delta);
+                    }
+                }
+            }
+            crate::layout::frame::FrameChildRef::Frame(fid) => {
+                if let Some(nested) = frame.frames.iter_mut().find(|f| f.frame_id == *fid) {
+                    if found {
+                        shift_block_positions_in_frame(nested, delta);
+                    } else {
+                        found = shift_frame_positions_after_block(nested, block_id, delta);
+                    }
+                }
+            }
+        }
+    }
+    found
 }
 
 // ── Paint-overlay helpers (recolor without reshape/reflow) ──────────────────
@@ -1007,10 +1052,19 @@ fn find_block_in_frame(frame: &FrameLayout, block_id: usize) -> Option<&BlockLay
     None
 }
 
-/// Check whether a frame (or any of its nested frames) contains a block with the given id.
+/// Check whether a frame (or any of its nested frames) contains a block
+/// with the given id — including blocks inside cells of tables that are
+/// direct children of the frame.
 pub(crate) fn frame_contains_block(frame: &FrameLayout, block_id: usize) -> bool {
     if frame.blocks.iter().any(|b| b.block_id == block_id) {
         return true;
+    }
+    for table in &frame.tables {
+        for cell in &table.cell_layouts {
+            if cell.blocks.iter().any(|b| b.block_id == block_id) {
+                return true;
+            }
+        }
     }
     frame
         .frames
@@ -1018,38 +1072,216 @@ pub(crate) fn frame_contains_block(frame: &FrameLayout, block_id: usize) -> bool
         .any(|nested| frame_contains_block(nested, block_id))
 }
 
-/// Replace a block inside a frame (searching nested frames recursively)
-/// and recompute content/total heights up the tree.
-fn relayout_block_in_frame(frame: &mut FrameLayout, block_id: usize, new_block: BlockLayout) {
-    let old_content_height = frame.content_height;
+/// Where inside a frame a given block lives (one level deep — nested
+/// frames are reported as `NestedFrame` and must be descended into).
+pub(crate) enum FrameBlockLocation {
+    /// A direct child block of the frame.
+    DirectBlock,
+    /// A block inside a cell of a table that is a direct child of the
+    /// frame. Carries `(table_id, row, column)`.
+    TableCell(usize, usize, usize),
+    /// A block somewhere inside a nested frame (carries the nested
+    /// frame's id).
+    NestedFrame(usize),
+}
 
-    // Try direct blocks first
-    if let Some(old) = frame.blocks.iter_mut().find(|b| b.block_id == block_id) {
-        *old = new_block;
-    } else {
-        // Recurse into nested frames
-        for nested in &mut frame.frames {
-            if frame_contains_block(nested, block_id) {
-                relayout_block_in_frame(nested, block_id, new_block);
-                break;
+/// Locate `block_id` among the direct children of `frame`.
+pub(crate) fn find_block_location_in_frame(
+    frame: &FrameLayout,
+    block_id: usize,
+) -> Option<FrameBlockLocation> {
+    if frame.blocks.iter().any(|b| b.block_id == block_id) {
+        return Some(FrameBlockLocation::DirectBlock);
+    }
+    for table in &frame.tables {
+        for cell in &table.cell_layouts {
+            if cell.blocks.iter().any(|b| b.block_id == block_id) {
+                return Some(FrameBlockLocation::TableCell(
+                    table.table_id,
+                    cell.row,
+                    cell.column,
+                ));
             }
         }
     }
+    for nested in &frame.frames {
+        if frame_contains_block(nested, block_id) {
+            return Some(FrameBlockLocation::NestedFrame(nested.frame_id));
+        }
+    }
+    None
+}
 
-    // Reposition all direct content (blocks, tables, nested frames) vertically
+/// Replace a direct child block of `frame` and re-stack the frame's
+/// children. The caller is responsible for routing blocks that live in
+/// nested frames or table cells (see `relayout_block_deep_in_frame`) —
+/// the block must have been laid out at this frame's `content_width`.
+fn relayout_block_in_frame(frame: &mut FrameLayout, block_id: usize, new_block: BlockLayout) {
+    if let Some(old) = frame.blocks.iter_mut().find(|b| b.block_id == block_id) {
+        *old = new_block;
+    }
+    reposition_frame_children(frame);
+}
+
+/// Relayout the block identified by `params.block_id` wherever it lives
+/// inside `frame`: as a direct block, inside a cell of a frame-nested
+/// table, or anywhere within a nested frame (recursing to any depth).
+/// Each level re-stacks its children in flow order on the way back up,
+/// so height changes propagate to the outermost frame's `total_height`.
+fn relayout_block_deep_in_frame(
+    frame: &mut FrameLayout,
+    registry: &FontRegistry,
+    params: &BlockLayoutParams,
+    scale_factor: f32,
+) {
+    match find_block_location_in_frame(frame, params.block_id) {
+        None => {}
+        Some(FrameBlockLocation::DirectBlock) => {
+            let new_block = layout_block(registry, params, frame.content_width, scale_factor);
+            relayout_block_in_frame(frame, params.block_id, new_block);
+        }
+        Some(FrameBlockLocation::TableCell(table_id, row, col)) => {
+            if let Some(table) = frame.tables.iter_mut().find(|t| t.table_id == table_id) {
+                recompute_table_cell(table, registry, params, row, col, scale_factor);
+            }
+            reposition_frame_children(frame);
+        }
+        Some(FrameBlockLocation::NestedFrame(nested_frame_id)) => {
+            if let Some(nested) = frame
+                .frames
+                .iter_mut()
+                .find(|f| f.frame_id == nested_frame_id)
+            {
+                relayout_block_deep_in_frame(nested, registry, params, scale_factor);
+            }
+            reposition_frame_children(frame);
+        }
+    }
+}
+
+/// Re-layout the block identified by `params.block_id` inside the cell at
+/// `(row, col)`, then recompute the row height, row y positions, and the
+/// table's `total_height`. Shared by the top-level table relayout path and
+/// the frame-nested one; the caller propagates the height delta into its
+/// own container.
+fn recompute_table_cell(
+    table: &mut crate::layout::table::TableLayout,
+    registry: &FontRegistry,
+    params: &BlockLayoutParams,
+    row: usize,
+    col: usize,
+    scale_factor: f32,
+) {
+    let cell_width = table
+        .column_content_widths
+        .get(col)
+        .copied()
+        .unwrap_or(200.0);
+
+    // Find the cell and replace the block
+    let cell = match table
+        .cell_layouts
+        .iter_mut()
+        .find(|c| c.row == row && c.column == col)
+    {
+        Some(c) => c,
+        None => return,
+    };
+
+    let new_block = layout_block(registry, params, cell_width, scale_factor);
+    if let Some(old) = cell
+        .blocks
+        .iter_mut()
+        .find(|b| b.block_id == params.block_id)
+    {
+        *old = new_block;
+    }
+
+    // Reposition blocks within the cell and recompute cell height
+    let mut block_y = 0.0f32;
+    for block in &mut cell.blocks {
+        block.y = block_y;
+        block_y += block.height;
+    }
+    let cell_height = block_y;
+
+    // Recompute row height by scanning all cells in this row
+    if row < table.row_heights.len() {
+        let mut max_h = 0.0f32;
+        for c in &table.cell_layouts {
+            if c.row == row {
+                let h: f32 = c.blocks.iter().map(|b| b.height).sum();
+                max_h = max_h.max(h);
+            }
+        }
+        // Also consider the cell we just updated
+        max_h = max_h.max(cell_height);
+        table.row_heights[row] = max_h;
+    }
+
+    // Recompute row y positions and total height
+    let border = table.border_width;
+    let padding = table.cell_padding;
+    let spacing = if table.row_ys.len() > 1 {
+        // Infer spacing from existing layout
+        if table.row_ys.len() >= 2 && !table.row_heights.is_empty() {
+            let expected = table.row_ys[0] + padding + table.row_heights[0] + padding;
+            (table.row_ys.get(1).copied().unwrap_or(expected) - expected).max(0.0)
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+    let mut y = border;
+    for (r, &row_h) in table.row_heights.iter().enumerate() {
+        if r < table.row_ys.len() {
+            table.row_ys[r] = y + padding;
+        }
+        y += padding * 2.0 + row_h;
+        if r < table.row_heights.len() - 1 {
+            y += spacing;
+        }
+    }
+    table.total_height = y + border;
+}
+
+/// Recompute the y position of every direct child of `frame` in document
+/// (flow) order, then update `content_height` / `total_height`.
+///
+/// Walks `frame.flow_order` so interleaved children keep their document
+/// order — stacking the per-kind vecs one after another would visually
+/// reorder a frame containing e.g. [block, table, block]. Placement
+/// mirrors `layout_frame` exactly: blocks at `content_y + top_margin`
+/// (no collapsing between frame children), tables and nested frames at
+/// `content_y` advancing by `total_height`.
+pub(crate) fn reposition_frame_children(frame: &mut FrameLayout) {
+    let old_content_height = frame.content_height;
+    let order = frame.flow_order.clone();
     let mut content_y = 0.0f32;
-    for block in &mut frame.blocks {
-        block.y = content_y + block.top_margin;
-        let block_content = block.height - block.top_margin - block.bottom_margin;
-        content_y = block.y + block_content + block.bottom_margin;
-    }
-    for table in &mut frame.tables {
-        table.y = content_y;
-        content_y += table.total_height;
-    }
-    for nested in &mut frame.frames {
-        nested.y = content_y;
-        content_y += nested.total_height;
+
+    for child in &order {
+        match child {
+            crate::layout::frame::FrameChildRef::Block(bid) => {
+                if let Some(block) = frame.blocks.iter_mut().find(|b| b.block_id == *bid) {
+                    block.y = content_y + block.top_margin;
+                    let block_content = block.height - block.top_margin - block.bottom_margin;
+                    content_y = block.y + block_content + block.bottom_margin;
+                }
+            }
+            crate::layout::frame::FrameChildRef::Table(tid) => {
+                if let Some(table) = frame.tables.iter_mut().find(|t| t.table_id == *tid) {
+                    table.y = content_y;
+                    content_y += table.total_height;
+                }
+            }
+            crate::layout::frame::FrameChildRef::Frame(fid) => {
+                if let Some(nested) = frame.frames.iter_mut().find(|f| f.frame_id == *fid) {
+                    nested.y = content_y;
+                    content_y += nested.total_height;
+                }
+            }
+        }
     }
 
     frame.content_height = content_y;

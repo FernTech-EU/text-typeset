@@ -185,10 +185,23 @@ fn compute_column_widths(
         .collect()
 }
 
-/// Generate border and background decoration rects for a table.
+/// Generate border and background decoration rects for a top-level table.
 pub fn generate_table_decorations(table: &TableLayout, scroll_offset: f32) -> Vec<DecorationRect> {
+    generate_table_decorations_at(table, 0.0, 0.0, scroll_offset)
+}
+
+/// Generate border and background decoration rects for a table whose
+/// origin is shifted by `(offset_x, offset_y)` — a table nested inside a
+/// frame (e.g. a blockquote), where the offsets are the frame's content
+/// origin.
+pub fn generate_table_decorations_at(
+    table: &TableLayout,
+    offset_x: f32,
+    offset_y: f32,
+    scroll_offset: f32,
+) -> Vec<DecorationRect> {
     let mut decorations = Vec::new();
-    let table_y = table.y - scroll_offset;
+    let table_y = offset_y + table.y - scroll_offset;
 
     // Outer table border
     if table.border_width > 0.0 {
@@ -196,14 +209,14 @@ pub fn generate_table_decorations(table: &TableLayout, scroll_offset: f32) -> Ve
         let color = [0.6, 0.6, 0.6, 1.0]; // gray border
         // Top
         decorations.push(DecorationRect {
-            rect: [0.0, table_y, table.total_width, bw],
+            rect: [offset_x, table_y, table.total_width, bw],
             color,
             kind: DecorationKind::TableBorder,
         });
         // Bottom
         decorations.push(DecorationRect {
             rect: [
-                0.0,
+                offset_x,
                 table_y + table.total_height - bw,
                 table.total_width,
                 bw,
@@ -213,13 +226,18 @@ pub fn generate_table_decorations(table: &TableLayout, scroll_offset: f32) -> Ve
         });
         // Left
         decorations.push(DecorationRect {
-            rect: [0.0, table_y, bw, table.total_height],
+            rect: [offset_x, table_y, bw, table.total_height],
             color,
             kind: DecorationKind::TableBorder,
         });
         // Right
         decorations.push(DecorationRect {
-            rect: [table.total_width - bw, table_y, bw, table.total_height],
+            rect: [
+                offset_x + table.total_width - bw,
+                table_y,
+                bw,
+                table.total_height,
+            ],
             color,
             kind: DecorationKind::TableBorder,
         });
@@ -228,7 +246,7 @@ pub fn generate_table_decorations(table: &TableLayout, scroll_offset: f32) -> Ve
         for r in 1..table.row_ys.len() {
             let row_y = table.row_ys[r] - table.cell_padding;
             decorations.push(DecorationRect {
-                rect: [0.0, table_y + row_y - bw / 2.0, table.total_width, bw],
+                rect: [offset_x, table_y + row_y - bw / 2.0, table.total_width, bw],
                 color,
                 kind: DecorationKind::TableBorder,
             });
@@ -238,7 +256,7 @@ pub fn generate_table_decorations(table: &TableLayout, scroll_offset: f32) -> Ve
         for c in 1..table.column_xs.len() {
             let col_x = table.column_xs[c] - table.cell_padding;
             decorations.push(DecorationRect {
-                rect: [col_x - bw / 2.0, table_y, bw, table.total_height],
+                rect: [offset_x + col_x - bw / 2.0, table_y, bw, table.total_height],
                 color,
                 kind: DecorationKind::TableBorder,
             });
@@ -256,7 +274,7 @@ pub fn generate_table_decorations(table: &TableLayout, scroll_offset: f32) -> Ve
             let cw = table.column_content_widths[cell.column] + table.cell_padding * 2.0;
             let ch = table.row_heights[cell.row] + table.cell_padding * 2.0;
             decorations.push(DecorationRect {
-                rect: [cx, table_y + cy, cw, ch],
+                rect: [offset_x + cx, table_y + cy, cw, ch],
                 color: bg_color,
                 kind: DecorationKind::TableCellBackground,
             });
