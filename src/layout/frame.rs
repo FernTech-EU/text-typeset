@@ -108,6 +108,7 @@ pub fn layout_frame(
     params: &FrameLayoutParams,
     available_width: f32,
     scale_factor: f32,
+    font_scale: f32,
 ) -> FrameLayout {
     let border = params.border_width;
     let pad = params.padding;
@@ -149,7 +150,13 @@ pub fn layout_frame(
     for (_flow_idx, item) in &ordered {
         match item {
             FlowItem::Block(block_params) => {
-                let mut block = layout_block(registry, block_params, content_width, scale_factor);
+                let mut block = layout_block(
+                    registry,
+                    block_params,
+                    content_width,
+                    scale_factor,
+                    font_scale,
+                );
                 block.y = content_y + block.top_margin;
                 let block_content = block.height - block.top_margin - block.bottom_margin;
                 content_y = block.y + block_content + block.bottom_margin;
@@ -157,14 +164,26 @@ pub fn layout_frame(
                 blocks.push(block);
             }
             FlowItem::Table(table_params) => {
-                let mut table = layout_table(registry, table_params, content_width, scale_factor);
+                let mut table = layout_table(
+                    registry,
+                    table_params,
+                    content_width,
+                    scale_factor,
+                    font_scale,
+                );
                 table.y = content_y;
                 content_y += table.total_height;
                 flow_order.push(FrameChildRef::Table(table.table_id));
                 tables.push(table);
             }
             FlowItem::Frame(frame_params) => {
-                let mut nested = layout_frame(registry, frame_params, content_width, scale_factor);
+                let mut nested = layout_frame(
+                    registry,
+                    frame_params,
+                    content_width,
+                    scale_factor,
+                    font_scale,
+                );
                 nested.y = content_y;
                 nested.x = 0.0;
                 content_y += nested.total_height;

@@ -84,7 +84,7 @@ fn layout_block_scale_factor_param_matches_flow_field() {
     // FlowLayout's field.
     let ts = make_typesetter();
     let flow = flow_at(&ts, 2.0);
-    let direct = layout_block(ts.font_registry(), &make_block(1, TEXT), 800.0, 2.0);
+    let direct = layout_block(ts.font_registry(), &make_block(1, TEXT), 800.0, 2.0, 1.0);
 
     let via_flow = flow.blocks.get(&1).unwrap();
     assert_eq!(via_flow.lines.len(), direct.lines.len());
@@ -96,8 +96,8 @@ fn layout_block_scale_factor_param_matches_flow_field() {
 #[test]
 fn shaped_advances_are_logical_at_any_scale_factor() {
     let ts = make_typesetter();
-    let r1 = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
-    let r2 = resolve_font(ts.font_registry(), None, None, None, None, None, 2.0).unwrap();
+    let r1 = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
+    let r2 = resolve_font(ts.font_registry(), None, None, None, None, None, 2.0, 1.0).unwrap();
     let run1 = shape_text(ts.font_registry(), &r1, TEXT, 0).unwrap();
     let run2 = shape_text(ts.font_registry(), &r2, TEXT, 0).unwrap();
     assert_eq!(run1.glyphs.len(), run2.glyphs.len());
@@ -110,8 +110,8 @@ fn shaped_advances_are_logical_at_any_scale_factor() {
 #[test]
 fn font_metrics_are_logical_at_any_scale_factor() {
     let ts = make_typesetter();
-    let r1 = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
-    let r2 = resolve_font(ts.font_registry(), None, None, None, None, None, 4.0).unwrap();
+    let r1 = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
+    let r2 = resolve_font(ts.font_registry(), None, None, None, None, None, 4.0, 1.0).unwrap();
     let m1 = font_metrics_px(ts.font_registry(), &r1).unwrap();
     let m2 = font_metrics_px(ts.font_registry(), &r2).unwrap();
     assert!((m1.ascent - m2.ascent).abs() < 0.05);

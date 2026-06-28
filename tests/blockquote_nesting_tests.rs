@@ -51,7 +51,9 @@ fn first_cell_block(frame: &text_document::FrameSnapshot) -> text_document::Bloc
         .elements
         .iter()
         .find_map(|e| match e {
-            FlowElementSnapshot::Table(t) => t.cells.first().and_then(|c| c.blocks.first()).cloned(),
+            FlowElementSnapshot::Table(t) => {
+                t.cells.first().and_then(|c| c.blocks.first()).cloned()
+            }
             _ => None,
         })
         .expect("frame contains a table with a populated first cell")
@@ -165,7 +167,9 @@ fn relayout_first_block_keeps_table_between_blocks() {
     let cursor = doc.cursor();
     cursor.set_position(first_block.position, text_document::MoveMode::MoveAnchor);
     cursor
-        .insert_text(&"growing text that wraps onto several lines once it is long enough ".repeat(4))
+        .insert_text(
+            &"growing text that wraps onto several lines once it is long enough ".repeat(4),
+        )
         .unwrap();
 
     let block_snapshot = doc
@@ -216,7 +220,9 @@ fn relayout_cell_block_in_quoted_table_grows_content() {
     let cursor = doc.cursor();
     cursor.set_position(cell_block.position, text_document::MoveMode::MoveAnchor);
     cursor
-        .insert_text("a much longer cell content that has to wrap onto multiple lines in the narrow column ")
+        .insert_text(
+            "a much longer cell content that has to wrap onto multiple lines in the narrow column ",
+        )
         .unwrap();
 
     let block_snapshot = doc

@@ -163,6 +163,15 @@ pub struct DocumentFlow {
     cursors: Vec<CursorDisplay>,
     zoom: f32,
     rendered_zoom: f32,
+    /// Per-document logical text-magnification factor (`1.0` = none). Unlike
+    /// `zoom` (a post-layout *display* transform that leaves font metrics
+    /// untouched) and `raster_scale`/`scale_factor` (raster density only),
+    /// `font_scale` multiplies the resolved logical font size *before* shaping,
+    /// so glyph advances, line heights, and `content_height` all grow and text
+    /// re-wraps. This is the accessibility "grow all text" knob. Set via
+    /// [`set_font_scale`](Self::set_font_scale); pushed into `flow_layout` at
+    /// every `layout_*` call alongside `scale_factor`.
+    font_scale: f32,
     /// Raster densification for content drawn under a scale transform.
     /// `1.0` = unscaled UI. Rasterization happens at
     /// `size × scale_factor × raster_scale` physical pixels while layout
@@ -208,6 +217,7 @@ impl DocumentFlow {
             cursors: Vec::new(),
             zoom: 1.0,
             rendered_zoom: f32::NAN,
+            font_scale: 1.0,
             raster_scale: 1.0,
             rendered_raster_scale: f32::NAN,
             layout_scale_generation: 0,
@@ -329,6 +339,26 @@ impl DocumentFlow {
         self.zoom
     }
 
+    // ── Font scale (logical text magnification) ──────────────────
+
+    /// Set the per-document logical font-scale factor (`1.0` = none).
+    ///
+    /// Unlike [`set_zoom`](Self::set_zoom) (a post-layout display transform
+    /// that does **not** change font metrics), `font_scale` multiplies the
+    /// resolved logical font size *before* shaping. Glyph advances, line
+    /// heights, and `content_height` all grow, and text re-wraps — true text
+    /// magnification, the mechanism behind an app-wide "grow all text"
+    /// accessibility setting. Takes effect on the next `layout_*` call.
+    /// Clamped to `0.1..=10.0`.
+    pub fn set_font_scale(&mut self, font_scale: f32) {
+        self.font_scale = font_scale.clamp(0.1, 10.0);
+    }
+
+    /// Current logical font-scale factor.
+    pub fn font_scale(&self) -> f32 {
+        self.font_scale
+    }
+
     /// Set the raster densification scale for content drawn under a
     /// scale transform (a zoomed scene viewport).
     ///
@@ -412,6 +442,7 @@ impl DocumentFlow {
         self.flow_layout.viewport_width = self.viewport_width;
         self.flow_layout.viewport_height = self.viewport_height;
         self.flow_layout.scale_factor = service.scale_factor;
+        self.flow_layout.font_scale = self.font_scale;
 
         for (_idx, kind) in all_items {
             match kind {
@@ -448,6 +479,7 @@ impl DocumentFlow {
         block_params: Vec<BlockLayoutParams>,
     ) {
         self.flow_layout.scale_factor = service.scale_factor;
+        self.flow_layout.font_scale = self.font_scale;
         self.flow_layout
             .layout_blocks(&service.font_registry, block_params, self.layout_width());
         self.note_layout_done(service);
@@ -457,6 +489,7 @@ impl DocumentFlow {
     /// (inline, float, absolute) is carried in `params`.
     pub fn add_frame(&mut self, service: &TextFontService, params: &FrameLayoutParams) {
         self.flow_layout.scale_factor = service.scale_factor;
+        self.flow_layout.font_scale = self.font_scale;
         self.flow_layout
             .add_frame(&service.font_registry, params, self.layout_width());
         self.note_layout_done(service);
@@ -465,6 +498,7 @@ impl DocumentFlow {
     /// Append a table to the current flow.
     pub fn add_table(&mut self, service: &TextFontService, params: &TableLayoutParams) {
         self.flow_layout.scale_factor = service.scale_factor;
+        self.flow_layout.font_scale = self.font_scale;
         self.flow_layout
             .add_table(&service.font_registry, params, self.layout_width());
         self.note_layout_done(service);
@@ -512,6 +546,7 @@ impl DocumentFlow {
             return Err(RelayoutError::ScaleDirty);
         }
         self.flow_layout.scale_factor = service.scale_factor;
+        self.flow_layout.font_scale = self.font_scale;
         self.flow_layout
             .relayout_block(&service.font_registry, params, self.layout_width());
         self.note_layout_done(service);
@@ -914,6 +949,7 @@ impl DocumentFlow {
             format.font_italic,
             font_point_size,
             service.scale_factor,
+            1.0, // standalone shaper: caller's explicit size is already theme-scaled
         ) {
             Some(r) => r,
             None => return empty,
@@ -1082,6 +1118,7 @@ impl DocumentFlow {
             format.font_italic,
             font_point_size,
             service.scale_factor,
+            1.0, // standalone shaper: caller's explicit size is already theme-scaled
         ) {
             Some(r) => r,
             None => return empty,
@@ -1369,6 +1406,7 @@ impl DocumentFlow {
             format.font_italic,
             base_point_size,
             service.scale_factor,
+            1.0, // standalone shaper: caller's explicit size is already theme-scaled
         ) {
             Some(r) => r,
             None => return empty,
@@ -1393,6 +1431,7 @@ impl DocumentFlow {
                 fmt.font_italic,
                 span_point_size,
                 service.scale_factor,
+                1.0, // standalone shaper: caller's explicit size is already theme-scaled
             ) else {
                 continue;
             };

@@ -38,6 +38,11 @@ pub struct FlowLayout {
     /// Layout is always stored in logical pixels; this only affects
     /// precision (physical ppem) and glyph bitmap resolution.
     pub scale_factor: f32,
+    /// Per-document logical text-magnification factor (`1.0` = none). Set from
+    /// `DocumentFlow::font_scale` at layout time and threaded into block layout
+    /// alongside `scale_factor`; multiplies the resolved font size so all text
+    /// grows logically (advances, line heights, content height) and reflows.
+    pub font_scale: f32,
     /// Un-overlaid (shaped) copy of every laid-out block, keyed by block_id.
     /// The paint-overlay fast path re-derives the live blocks from these so
     /// repeated highlight changes never compound run splits. Populated by a
@@ -68,6 +73,7 @@ impl FlowLayout {
             viewport_height: 0.0,
             cached_max_content_width: 0.0,
             scale_factor: 1.0,
+            font_scale: 1.0,
             base_blocks: HashMap::new(),
             pending_paint_spans: HashMap::new(),
         }
@@ -80,7 +86,13 @@ impl FlowLayout {
         params: &TableLayoutParams,
         available_width: f32,
     ) {
-        let mut table = layout_table(registry, params, available_width, self.scale_factor);
+        let mut table = layout_table(
+            registry,
+            params,
+            available_width,
+            self.scale_factor,
+            self.font_scale,
+        );
 
         let mut y = self.content_height;
         table.y = y;
@@ -114,7 +126,13 @@ impl FlowLayout {
     ) {
         use crate::layout::frame::FramePosition;
 
-        let mut frame = layout_frame(registry, params, available_width, self.scale_factor);
+        let mut frame = layout_frame(
+            registry,
+            params,
+            available_width,
+            self.scale_factor,
+            self.font_scale,
+        );
 
         match params.position {
             FramePosition::Inline => {
@@ -300,7 +318,13 @@ impl FlowLayout {
         params: &BlockLayoutParams,
         available_width: f32,
     ) {
-        let mut block = layout_block(registry, params, available_width, self.scale_factor);
+        let mut block = layout_block(
+            registry,
+            params,
+            available_width,
+            self.scale_factor,
+            self.font_scale,
+        );
 
         // Margin collapsing with previous block
         let mut y = self.content_height;
@@ -434,7 +458,13 @@ impl FlowLayout {
         let old_end = old_y + old_content + old_bottom_margin;
         let old_char_len = block_char_len(self.blocks.get(&block_id));
 
-        let mut block = layout_block(registry, params, available_width, self.scale_factor);
+        let mut block = layout_block(
+            registry,
+            params,
+            available_width,
+            self.scale_factor,
+            self.font_scale,
+        );
         block.y = old_y;
 
         if (block.top_margin - old_top_margin).abs() > 0.001 {
@@ -490,7 +520,15 @@ impl FlowLayout {
         };
 
         let old_table_height = table.total_height;
-        recompute_table_cell(table, registry, params, row, col, self.scale_factor);
+        recompute_table_cell(
+            table,
+            registry,
+            params,
+            row,
+            col,
+            self.scale_factor,
+            self.font_scale,
+        );
         let delta = table.total_height - old_table_height;
 
         // Update flow_order entry for this table
@@ -527,7 +565,13 @@ impl FlowLayout {
 
         {
             let frame = self.frames.get_mut(&frame_id).unwrap();
-            relayout_block_deep_in_frame(frame, registry, params, self.scale_factor);
+            relayout_block_deep_in_frame(
+                frame,
+                registry,
+                params,
+                self.scale_factor,
+                self.font_scale,
+            );
         }
 
         let new_total_height = self.frames[&frame_id].total_height;
@@ -859,7 +903,11 @@ fn shift_block_positions_in_frame(frame: &mut FrameLayout, delta: isize) {
 /// Shift the `position` of every cell block that comes after `block_id`
 /// within `table` (cells iterate in document/row-major order). Returns
 /// `true` when the edited block was found in this table.
-fn shift_table_positions_after_block(table: &mut TableLayout, block_id: usize, delta: isize) -> bool {
+fn shift_table_positions_after_block(
+    table: &mut TableLayout,
+    block_id: usize,
+    delta: isize,
+) -> bool {
     let mut found = false;
     for cell in &mut table.cell_layouts {
         for b in &mut cell.blocks {
@@ -1133,16 +1181,23 @@ fn relayout_block_deep_in_frame(
     registry: &FontRegistry,
     params: &BlockLayoutParams,
     scale_factor: f32,
+    font_scale: f32,
 ) {
     match find_block_location_in_frame(frame, params.block_id) {
         None => {}
         Some(FrameBlockLocation::DirectBlock) => {
-            let new_block = layout_block(registry, params, frame.content_width, scale_factor);
+            let new_block = layout_block(
+                registry,
+                params,
+                frame.content_width,
+                scale_factor,
+                font_scale,
+            );
             relayout_block_in_frame(frame, params.block_id, new_block);
         }
         Some(FrameBlockLocation::TableCell(table_id, row, col)) => {
             if let Some(table) = frame.tables.iter_mut().find(|t| t.table_id == table_id) {
-                recompute_table_cell(table, registry, params, row, col, scale_factor);
+                recompute_table_cell(table, registry, params, row, col, scale_factor, font_scale);
             }
             reposition_frame_children(frame);
         }
@@ -1152,7 +1207,7 @@ fn relayout_block_deep_in_frame(
                 .iter_mut()
                 .find(|f| f.frame_id == nested_frame_id)
             {
-                relayout_block_deep_in_frame(nested, registry, params, scale_factor);
+                relayout_block_deep_in_frame(nested, registry, params, scale_factor, font_scale);
             }
             reposition_frame_children(frame);
         }
@@ -1171,6 +1226,7 @@ fn recompute_table_cell(
     row: usize,
     col: usize,
     scale_factor: f32,
+    font_scale: f32,
 ) {
     let cell_width = table
         .column_content_widths
@@ -1188,7 +1244,7 @@ fn recompute_table_cell(
         None => return,
     };
 
-    let new_block = layout_block(registry, params, cell_width, scale_factor);
+    let new_block = layout_block(registry, params, cell_width, scale_factor, font_scale);
     if let Some(old) = cell
         .blocks
         .iter_mut()

@@ -303,6 +303,7 @@ impl TextFontService {
             format.font_italic,
             font_point_size,
             self.scale_factor,
+            1.0, // explicit format size is already scaled by the caller
         ) {
             Some(r) => r,
             None => return 0.0,

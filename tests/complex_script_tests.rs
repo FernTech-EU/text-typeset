@@ -23,7 +23,8 @@ fn typesetter_with(font: &[u8]) -> Typesetter {
 
 /// Glyph id of the single glyph produced by shaping `text` in isolation.
 fn isolated_glyph(ts: &Typesetter, text: &str) -> u16 {
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let run = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
     run.glyphs.first().map(|g| g.glyph_id).unwrap_or(0)
 }
@@ -31,7 +32,8 @@ fn isolated_glyph(ts: &Typesetter, text: &str) -> u16 {
 #[test]
 fn arabic_letters_join_into_contextual_forms() {
     let ts = typesetter_with(NOTO_ARABIC);
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
 
     // Isolated forms of kaf, teh, beh.
     let isolated: HashSet<u16> = [
@@ -70,7 +72,8 @@ fn arabic_letters_join_into_contextual_forms() {
 #[test]
 fn devanagari_forms_a_conjunct() {
     let ts = typesetter_with(NOTO_DEVANAGARI);
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
 
     // क + ् (virama) + ष  →  क्ष  : the virama ligates ka+ssa into a
     // single conjunct cluster, so 3 codepoints shape to fewer glyphs.
@@ -95,7 +98,8 @@ fn devanagari_forms_a_conjunct() {
 #[test]
 fn hebrew_rtl_glyphs_are_in_visual_order() {
     let ts = typesetter_with(NOTO_HEBREW);
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
 
     // "שלום" (shalom). Shaped RTL, harfrust returns glyphs in visual
     // (left-to-right) order, so cluster byte offsets are non-increasing.

@@ -24,7 +24,7 @@ fn without_system_fonts_leaves_uncovered_chars_as_notdef() {
     // back to: the CJK char stays .notdef.
     assert_eq!(s.font_registry().all_entries().count(), 1);
 
-    let resolved = resolve_font(s.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved = resolve_font(s.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let run = shape_text(s.font_registry(), &resolved, CJK, 0).unwrap();
     assert!(
         run.glyphs.iter().any(|g| g.glyph_id == 0),
@@ -46,7 +46,7 @@ fn system_fonts_provide_fallback_for_uncovered_chars() {
         "new() should enumerate OS fonts"
     );
 
-    let resolved = resolve_font(s.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved = resolve_font(s.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let run = shape_text(s.font_registry(), &resolved, CJK, 0).unwrap();
     assert!(
         run.glyphs.iter().all(|g| g.glyph_id != 0),

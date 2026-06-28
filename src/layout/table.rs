@@ -60,6 +60,7 @@ pub fn layout_table(
     params: &TableLayoutParams,
     available_width: f32,
     scale_factor: f32,
+    font_scale: f32,
 ) -> TableLayout {
     let cols = params.columns.max(1);
     let rows = params.rows.max(1);
@@ -105,7 +106,7 @@ pub fn layout_table(
         let mut cell_height = 0.0f32;
 
         for block_params in &cell_params.blocks {
-            let block = layout_block(registry, block_params, cell_width, scale_factor);
+            let block = layout_block(registry, block_params, cell_width, scale_factor, font_scale);
             cell_height += block.height;
             cell_blocks.push(block);
         }

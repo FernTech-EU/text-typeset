@@ -18,7 +18,8 @@ fn layout_text(
     width: f32,
     alignment: Alignment,
 ) -> Vec<text_typeset::layout::line::LayoutLine> {
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let run = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
     break_into_lines(vec![run], text, width, alignment, 0.0, &metrics, None)
@@ -185,7 +186,8 @@ fn lines_have_positive_height() {
 #[test]
 fn first_line_indent_reduces_available_space() {
     let ts = make_typesetter();
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let text = "Word word word word word word word word word word word.";
     let run = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
@@ -235,7 +237,8 @@ fn mandatory_break_newline() {
 fn all_glyphs_accounted_for_after_wrapping() {
     let ts = make_typesetter();
     let text = "The quick brown fox jumps over the lazy dog.";
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let run = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
     let total_glyphs: usize = run.glyphs.len();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
@@ -261,7 +264,7 @@ fn all_glyphs_accounted_for_after_wrapping() {
 fn block_layout_produces_lines() {
     let ts = make_typesetter();
     let params = make_block(1, "Hello world");
-    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0);
+    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0, 1.0);
 
     assert_eq!(block.block_id, 1);
     assert!(
@@ -278,7 +281,7 @@ fn block_layout_with_margins() {
     params.top_margin = 10.0;
     params.bottom_margin = 5.0;
 
-    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0);
+    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0, 1.0);
 
     let content_height: f32 = block.lines.iter().map(|l| l.line_height).sum();
     let expected = params.top_margin + content_height + params.bottom_margin;
@@ -298,8 +301,8 @@ fn block_layout_respects_left_right_margins() {
     params.left_margin = 50.0;
     params.right_margin = 50.0;
 
-    let wide = layout_block(ts.font_registry(), &make_block(2, text), 400.0, 1.0);
-    let narrow = layout_block(ts.font_registry(), &params, 400.0, 1.0);
+    let wide = layout_block(ts.font_registry(), &make_block(2, text), 400.0, 1.0, 1.0);
+    let narrow = layout_block(ts.font_registry(), &params, 400.0, 1.0, 1.0);
 
     // With 100px total margins, there's less room for text = more lines
     assert!(
@@ -315,7 +318,7 @@ fn block_lines_have_increasing_y() {
     let ts = make_typesetter();
     let text = "Line one. Line two. Line three. Line four. Line five.";
     let params = make_block(1, text);
-    let block = layout_block(ts.font_registry(), &params, 100.0, 1.0);
+    let block = layout_block(ts.font_registry(), &params, 100.0, 1.0, 1.0);
 
     for i in 1..block.lines.len() {
         assert!(
@@ -470,7 +473,8 @@ fn emergency_break_on_long_word() {
         lines.len()
     );
     // All glyphs should still be present
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let run = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
     let total_glyphs = run.glyphs.len();
     let glyphs_in_lines: usize = lines
@@ -513,7 +517,8 @@ fn margin_collapsing_uses_max_not_sum() {
 #[test]
 fn text_indent_shifts_first_line() {
     let ts = make_typesetter();
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let text = "Hello world, this is a test sentence for indentation.";
     let run = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
@@ -555,10 +560,19 @@ fn multi_fragment_all_glyphs_accounted() {
     // Verify no glyph loss when a paragraph has multiple formatting runs
     let ts = make_typesetter();
     let text = "Bold Normal";
-    let resolved_bold =
-        resolve_font(ts.font_registry(), None, None, Some(true), None, None, 1.0).unwrap();
+    let resolved_bold = resolve_font(
+        ts.font_registry(),
+        None,
+        None,
+        Some(true),
+        None,
+        None,
+        1.0,
+        1.0,
+    )
+    .unwrap();
     let resolved_normal =
-        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
 
     let run1 = shape_text(ts.font_registry(), &resolved_bold, "Bold ", 0).unwrap();
     let run2 = shape_text(ts.font_registry(), &resolved_normal, "Normal", 5).unwrap();
@@ -595,7 +609,8 @@ fn multi_fragment_wrapping_breaks_at_correct_boundary() {
     // due to cluster values being in fragment-local space.
     let ts = make_typesetter();
     let text = "AAAA BBBB";
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
 
     // Shape as two separate runs (simulating two fragments)
     let run1 = shape_text(ts.font_registry(), &resolved, "AAAA ", 0).unwrap();
@@ -651,11 +666,11 @@ fn line_height_multiplier_increases_block_height() {
 
     let mut normal = make_block(1, "Hello world");
     normal.line_height_multiplier = None; // default 1.0
-    let block_normal = layout_block(ts.font_registry(), &normal, 800.0, 1.0);
+    let block_normal = layout_block(ts.font_registry(), &normal, 800.0, 1.0, 1.0);
 
     let mut double = make_block(2, "Hello world");
     double.line_height_multiplier = Some(2.0);
-    let block_double = layout_block(ts.font_registry(), &double, 800.0, 1.0);
+    let block_double = layout_block(ts.font_registry(), &double, 800.0, 1.0, 1.0);
 
     assert!(
         block_double.height > block_normal.height * 1.8,
@@ -672,11 +687,11 @@ fn non_breakable_lines_prevents_wrapping() {
     let text = "This is a long sentence that would normally wrap at a narrow width.";
 
     let wrapping = make_block(1, text);
-    let block_wrap = layout_block(ts.font_registry(), &wrapping, 100.0, 1.0);
+    let block_wrap = layout_block(ts.font_registry(), &wrapping, 100.0, 1.0, 1.0);
 
     let mut no_wrap = make_block(2, text);
     no_wrap.non_breakable_lines = true;
-    let block_no_wrap = layout_block(ts.font_registry(), &no_wrap, 100.0, 1.0);
+    let block_no_wrap = layout_block(ts.font_registry(), &no_wrap, 100.0, 1.0, 1.0);
 
     assert!(
         block_wrap.lines.len() > 1,
@@ -695,7 +710,7 @@ fn tab_stops_advance_to_next_position() {
 
     let mut params = make_block(1, "A\tB");
     params.tab_positions = vec![100.0, 200.0, 300.0];
-    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0);
+    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0, 1.0);
 
     // The tab should push B to approximately x=100
     assert!(!block.lines.is_empty());
@@ -716,7 +731,7 @@ fn checkbox_marker_renders() {
     let mut params = make_block(1, "Todo item");
     params.checkbox = Some(false); // unchecked
     params.list_indent = 24.0;
-    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0);
+    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0, 1.0);
 
     assert!(
         block.list_marker.is_some(),
@@ -731,7 +746,7 @@ fn checked_checkbox_marker_renders() {
     let mut params = make_block(1, "Done item");
     params.checkbox = Some(true); // checked
     params.list_indent = 24.0;
-    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0);
+    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0, 1.0);
 
     assert!(
         block.list_marker.is_some(),
@@ -745,7 +760,7 @@ fn background_color_stored_in_layout() {
 
     let mut params = make_block(1, "Highlighted");
     params.background_color = Some([1.0, 1.0, 0.0, 0.3]);
-    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0);
+    let block = layout_block(ts.font_registry(), &params, 800.0, 1.0, 1.0);
 
     assert_eq!(
         block.background_color,

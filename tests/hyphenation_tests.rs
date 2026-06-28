@@ -23,7 +23,7 @@ fn service() -> TextFontService {
 
 /// Glyph id of `-` in the default font (the rendered-hyphen glyph).
 fn hyphen_gid(s: &TextFontService) -> u16 {
-    let resolved = resolve_font(s.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved = resolve_font(s.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     shape_text(s.font_registry(), &resolved, "-", 0)
         .unwrap()
         .glyphs[0]
@@ -51,7 +51,7 @@ fn dictionary_hyphenation_breaks_a_long_word_with_a_hyphen() {
     let mut params = make_block(1, LONG_WORD);
     params.hyphenation = Some(text_typeset::Hyphenation::ENGLISH);
     // Narrow column forces the single long word to wrap mid-word.
-    let layout = layout_block(s.font_registry(), &params, 90.0, 1.0);
+    let layout = layout_block(s.font_registry(), &params, 90.0, 1.0, 1.0);
 
     assert!(
         layout.lines.len() >= 2,
@@ -71,7 +71,7 @@ fn hyphenation_off_inserts_no_hyphen() {
 
     let mut params = make_block(1, LONG_WORD);
     params.hyphenation = None; // explicit: the default
-    let layout = layout_block(s.font_registry(), &params, 90.0, 1.0);
+    let layout = layout_block(s.font_registry(), &params, 90.0, 1.0, 1.0);
 
     assert!(
         !has_trailing_hyphen(&layout, hyphen),
@@ -100,7 +100,7 @@ fn soft_hyphen_breaks_and_renders_a_hyphen() {
     let text = "verylongunbreak\u{00AD}ablecompoundword";
     let mut params = make_block(1, text);
     params.hyphenation = Some(text_typeset::Hyphenation::ENGLISH);
-    let layout = layout_block(s.font_registry(), &params, 110.0, 1.0);
+    let layout = layout_block(s.font_registry(), &params, 110.0, 1.0, 1.0);
 
     assert!(layout.lines.len() >= 2, "soft-hyphen word should wrap");
     assert!(
@@ -117,10 +117,10 @@ fn hyphenation_does_not_change_text_that_fits() {
 
     let mut on = make_block(1, "short words here");
     on.hyphenation = Some(text_typeset::Hyphenation::ENGLISH);
-    let layout_on = layout_block(s.font_registry(), &on, 1000.0, 1.0);
+    let layout_on = layout_block(s.font_registry(), &on, 1000.0, 1.0, 1.0);
 
     let off = make_block(1, "short words here");
-    let layout_off = layout_block(s.font_registry(), &off, 1000.0, 1.0);
+    let layout_off = layout_block(s.font_registry(), &off, 1000.0, 1.0, 1.0);
 
     assert_eq!(layout_on.lines.len(), 1);
     assert_eq!(layout_off.lines.len(), 1);

@@ -90,7 +90,7 @@ fn font_resolve_with_default_fallback() {
     ts.set_default_font(face, 14.0);
 
     // Resolve with no family specified — should fall back to default
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0);
+    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0);
     assert!(resolved.is_some());
     let resolved = resolved.unwrap();
     assert_eq!(resolved.font_face_id, face);
@@ -112,6 +112,7 @@ fn font_resolve_with_explicit_family() {
         None,
         None,
         Some(24),
+        1.0,
         1.0,
     );
     assert!(resolved.is_some());
@@ -136,6 +137,7 @@ fn font_resolve_bold_uses_weight_700() {
         None,
         None,
         1.0,
+        1.0,
     );
     assert!(resolved.is_some());
 }
@@ -158,7 +160,7 @@ fn resolve_with_no_default_font_returns_none() {
     use text_typeset::font::resolve::resolve_font;
 
     let ts = Typesetter::new(); // no fonts registered, no default
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0);
+    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0);
     assert!(resolved.is_none());
 }
 
@@ -178,6 +180,7 @@ fn font_weight_takes_priority_over_font_bold() {
         Some(true),
         None,
         None,
+        1.0,
         1.0,
     );
     assert!(resolved.is_some());
@@ -262,6 +265,7 @@ fn resolve_font_with_nonexistent_family_falls_back() {
         None,
         Some(20),
         1.0,
+        1.0,
     );
     assert!(resolved.is_some());
     let resolved = resolved.unwrap();
@@ -292,7 +296,8 @@ fn default_line_height_matches_manual_metrics() {
     let face = ts.register_font(NOTO_SANS);
     ts.set_default_font(face, 14.0);
 
-    let resolved = resolve_font(ts.font_registry(), None, None, None, None, None, 1.0).unwrap();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
     let expected = metrics.ascent + metrics.descent + metrics.leading;
 

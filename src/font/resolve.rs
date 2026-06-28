@@ -34,12 +34,18 @@ pub fn resolve_font(
     font_italic: Option<bool>,
     font_point_size: Option<u32>,
     scale_factor: f32,
+    font_scale: f32,
 ) -> Option<ResolvedFont> {
     let weight = resolve_weight(font_weight, font_bold);
     let italic = font_italic.unwrap_or(false);
+    // `font_scale` is the per-document logical text-magnification factor
+    // (accessibility "grow all text"), distinct from `scale_factor` (HiDPI
+    // raster density). It multiplies the logical point size so advances, line
+    // heights, and content height all grow and the text reflows correctly.
     let size_px = font_point_size
         .map(|s| s as f32)
-        .unwrap_or(registry.default_size_px());
+        .unwrap_or(registry.default_size_px())
+        * font_scale;
 
     // Try the specified family first
     if let Some(family) = font_family
