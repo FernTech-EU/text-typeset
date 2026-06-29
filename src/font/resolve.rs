@@ -47,19 +47,27 @@ pub fn resolve_font(
         .unwrap_or(registry.default_size_px())
         * font_scale;
 
-    // Try the specified family first
-    if let Some(family) = font_family
-        && let Some(face_id) = registry.query_font(family, weight, italic)
-    {
-        let entry = registry.get(face_id)?;
-        return Some(ResolvedFont {
-            font_face_id: face_id,
-            size_px,
-            face_index: entry.face_index,
-            swash_cache_key: entry.swash_cache_key,
-            scale_factor,
-            weight,
-        });
+    // Try the specified family first.
+    if let Some(family) = font_family {
+        if let Some(face_id) = registry.query_font(family, weight, italic) {
+            let entry = registry.get(face_id)?;
+            return Some(ResolvedFont {
+                font_face_id: face_id,
+                size_px,
+                face_index: entry.face_index,
+                swash_cache_key: entry.swash_cache_key,
+                scale_factor,
+                weight,
+            });
+        }
+        // A family was explicitly requested but is not registered. Warn once
+        // (per family, per process) so the silent fall-back to the default
+        // font is visible — a theme that sets `family = "Roboto"` without
+        // registering Roboto would otherwise just render the default with no
+        // signal. This is the only place that warns; the lower-level
+        // `query_font` is also used for glyph-fallback probing, which misses
+        // by design and must stay quiet.
+        warn_unknown_family(family);
     }
 
     // Fall back to default font, but still try to match weight/italic
@@ -87,6 +95,23 @@ pub fn resolve_font(
         scale_factor,
         weight,
     })
+}
+
+/// Warn once per process per family when a requested font family is not
+/// registered, so the silent fall-back to the default font is visible.
+fn warn_unknown_family(family: &str) {
+    use std::collections::HashSet;
+    use std::sync::{LazyLock, Mutex};
+    static WARNED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+    if let Ok(mut warned) = WARNED.lock()
+        && warned.insert(family.to_string())
+    {
+        eprintln!(
+            "text-typeset: font family {family:?} is not registered; falling back \
+             to the default font. Register it (e.g. via the host application's font \
+             registrar) before shaping."
+        );
+    }
 }
 
 /// Check if a font has a glyph for the given character.
