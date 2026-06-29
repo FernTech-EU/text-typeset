@@ -33,8 +33,8 @@ hyphenation-western-european = [
 hyphenation-all-languages = ["hypher/default"]
 
 [dependencies]
-harfrust = "0.8.4"
-swash = "0.2"
+harfrust = "0.11.0"
+swash = "0.2.9"
 fontdb = "0.23.0"
 etagere = "0.3"
 icu_segmenter = "2"
@@ -47,8 +47,8 @@ text-document = { path = "../text-document/crates/public_api", version = "1.6.3"
 hypher = { version = "0.1.7", default-features = false }
 
 [dev-dependencies]
-text-document = { path = "../text-document/crates/public_api", version = "1.6.3" }
-insta = { version = "1.40", features = ["yaml"] }
+text-document = { path = "../text-document/crates/public_api", version = "1.7.0" }
+insta = { version = "1.48.0", features = ["yaml"] }
 proptest = "1"
 
 [profile.release]
