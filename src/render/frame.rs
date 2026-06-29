@@ -510,7 +510,13 @@ fn render_frame_layout(
     // Border + cell-background decorations for tables nested anywhere in
     // this frame tree (recursive — render_nested_frame draws only cell
     // content).
-    append_frame_table_decorations(frame, 0.0, 0.0, scroll_offset, &mut render_frame.decorations);
+    append_frame_table_decorations(
+        frame,
+        0.0,
+        0.0,
+        scroll_offset,
+        &mut render_frame.decorations,
+    );
 
     // Frame border decorations
     append_frame_border_decorations(frame, scroll_offset, &mut render_frame.decorations);

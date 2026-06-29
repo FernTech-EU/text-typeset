@@ -26,6 +26,7 @@ pub struct ResolvedFont {
 /// 2. Apply font_weight (or font_bold as weight 700)
 /// 3. Apply font_italic
 /// 4. Fall back to the default font if no match
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_font(
     registry: &FontRegistry,
     font_family: Option<&str>,
