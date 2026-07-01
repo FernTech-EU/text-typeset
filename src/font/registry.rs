@@ -6,7 +6,25 @@ use std::sync::OnceLock;
 use fontdb::{Database, Family, Query, Source, Style, Weight};
 use harfrust::{FontRef, ShaperData};
 
+use crate::font::writing_system_index::{
+    FaceBytes, FaceRef, WritingSystemIndexBuilder, build_from_faces,
+};
 use crate::types::FontFaceId;
+
+/// Summary of one installed font family, for building a font picker.
+///
+/// `name` is the primary (English, where available) family name; faces of
+/// different weights/styles are collapsed into one entry. `monospaced` is
+/// true when any face of the family is monospaced — read straight from
+/// fontdb metadata, so producing a whole [`Vec<FontFamilyInfo>`] loads no
+/// font bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontFamilyInfo {
+    /// Primary family name (e.g. `"DejaVu Sans"`).
+    pub name: String,
+    /// True if any face of the family is monospaced.
+    pub monospaced: bool,
+}
 
 /// Byte container owned by a [`FontEntry`]. Erased behind a trait
 /// object so the registry can hold any of `Vec<u8>`, `memmap2::Mmap`,
@@ -341,6 +359,87 @@ impl FontRegistry {
     /// Find our FontFaceId for a fontdb ID.
     fn fontdb_id_to_face_id(&self, fontdb_id: fontdb::ID) -> Option<FontFaceId> {
         self.fontdb_index.get(&fontdb_id).copied()
+    }
+
+    /// Enumerate every installed font family, deduplicated (case-insensitive)
+    /// and sorted (case-insensitive Unicode).
+    ///
+    /// Cheap: it reads only fontdb metadata (family name + monospaced flag),
+    /// so no font file is opened. This is the item source for a font picker.
+    /// Multiple faces of one family (Regular/Bold/Italic) collapse into a
+    /// single entry, whose `monospaced` is true if any face is monospaced.
+    pub fn families(&self) -> Vec<FontFamilyInfo> {
+        // key = lowercased name (dedupe); value = (display name, monospaced).
+        let mut map: HashMap<String, (String, bool)> = HashMap::new();
+        for face in self.fontdb.faces() {
+            // `families[0]` is the English (US) name where present.
+            let Some((name, _)) = face.families.first() else {
+                continue;
+            };
+            let entry = map
+                .entry(name.to_lowercase())
+                .or_insert_with(|| (name.clone(), false));
+            entry.1 |= face.monospaced;
+        }
+        let mut out: Vec<FontFamilyInfo> = map
+            .into_values()
+            .map(|(name, monospaced)| FontFamilyInfo { name, monospaced })
+            .collect();
+        out.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        out
+    }
+
+    /// Enumerate installed font family names, deduplicated and sorted — the
+    /// simple projection of [`families`](Self::families).
+    pub fn family_names(&self) -> Vec<String> {
+        self.families().into_iter().map(|f| f.name).collect()
+    }
+
+    /// True if any face of the named family is monospaced. Reads only fontdb
+    /// metadata (no bytes loaded). Case-insensitive on the family name.
+    pub fn family_is_monospaced(&self, family: &str) -> bool {
+        let target = family.to_lowercase();
+        self.fontdb.faces().any(|f| {
+            f.monospaced
+                && f.families
+                    .first()
+                    .is_some_and(|(n, _)| n.to_lowercase() == target)
+        })
+    }
+
+    /// Build a `Send` snapshot of every family's face byte-sources, ready to
+    /// be moved to a background thread and turned into a writing-system
+    /// coverage map (see [`WritingSystemIndexBuilder`]).
+    ///
+    /// Cheap on the calling thread: it clones file paths / shares `Arc`s but
+    /// reads no font bytes. The expensive OS/2 parsing happens in
+    /// [`WritingSystemIndexBuilder::build`], which the caller runs
+    /// off-thread.
+    /// The coverage map is keyed by the **lowercased** family name so it
+    /// aligns with [`families`](Self::families)' case-insensitive dedup —
+    /// callers look up by `name.to_lowercase()`. (Faces of one family can
+    /// disagree on name casing; a case-sensitive key would split or miss.)
+    pub fn writing_system_index_builder(&self) -> WritingSystemIndexBuilder {
+        build_from_faces(self.fontdb.faces().filter_map(|face| {
+            let (family, _) = face.families.first()?;
+            let bytes = match &face.source {
+                Source::File(path) => FaceBytes::Path(path.clone()),
+                Source::SharedFile(_, data) => FaceBytes::Shared(data.clone()),
+                Source::Binary(data) => FaceBytes::Shared(data.clone()),
+            };
+            Some((
+                family.to_lowercase(),
+                FaceRef {
+                    bytes,
+                    index: face.index,
+                },
+            ))
+        }))
     }
 
     /// Iterate all registered font entries for glyph fallback.

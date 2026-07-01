@@ -36,6 +36,10 @@ hyphenation-all-languages = ["hypher/default"]
 harfrust = "0.11.0"
 swash = "0.2.9"
 fontdb = "0.23.0"
+# OS/2 unicode-range + cmap reader for font writing-system (script)
+# classification. Resolves to the exact version already pulled in
+# transitively by fontdb, so it adds no newly-compiled crate.
+ttf-parser = "0.25"
 etagere = "0.3"
 icu_segmenter = "2"
 unicode-bidi = "0.3"

@@ -1714,6 +1714,7 @@ dependencies = [
  "swash",
  "text-document",
  "thiserror",
+ "ttf-parser",
  "unicode-bidi",
 ]
 

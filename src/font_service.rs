@@ -264,6 +264,43 @@ impl TextFontService {
         &self.font_registry
     }
 
+    // ── Font enumeration (font picker) ──────────────────────────
+
+    /// Enumerate every installed font family, deduplicated and sorted.
+    ///
+    /// Cheap (fontdb metadata only — no font bytes loaded). Collapses
+    /// weight/style faces into one entry per family, with `monospaced`
+    /// true when any face of the family is monospaced. The item source for
+    /// a font picker.
+    pub fn families(&self) -> Vec<crate::font::FontFamilyInfo> {
+        self.font_registry.families()
+    }
+
+    /// Enumerate installed font family names, deduplicated and sorted — the
+    /// simple projection of [`families`](Self::families).
+    pub fn family_names(&self) -> Vec<String> {
+        self.font_registry.family_names()
+    }
+
+    /// True if any face of the named family is monospaced (fontdb metadata,
+    /// no bytes loaded). Case-insensitive on the family name.
+    pub fn family_is_monospaced(&self, family: &str) -> bool {
+        self.font_registry.family_is_monospaced(family)
+    }
+
+    /// Build a `Send` snapshot of every family's face byte-sources, to be
+    /// moved to a background thread and turned into a writing-system
+    /// coverage map (see [`WritingSystemIndexBuilder`]).
+    ///
+    /// Cheap on the calling thread; the expensive per-face OS/2 parsing runs
+    /// in [`WritingSystemIndexBuilder::build`] off-thread.
+    ///
+    /// [`WritingSystemIndexBuilder`]: crate::font::WritingSystemIndexBuilder
+    /// [`WritingSystemIndexBuilder::build`]: crate::font::WritingSystemIndexBuilder::build
+    pub fn writing_system_index_builder(&self) -> crate::font::WritingSystemIndexBuilder {
+        self.font_registry.writing_system_index_builder()
+    }
+
     // ── Font metrics ────────────────────────────────────────────
 
     /// Line height (in logical pixels) for the registry's default
