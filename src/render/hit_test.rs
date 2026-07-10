@@ -683,7 +683,13 @@ fn caret_rect_in_block(
     let line = matched?;
     let caret_x = line.x_for_offset(offset_in_block) + block.left_margin + offset_x;
     let caret_y = offset_y + block.y + line.y - line.ascent - scroll_offset;
-    let caret_height = line.line_height;
+    // The caret spans the natural glyph box (ascent + descent + leading), NOT
+    // the block's `line_height`: with a line-height multiplier > 1 the latter is
+    // inflated by the extra leading (added below the glyphs), which would make
+    // the caret overshoot far past the text. `ascent + descent + leading` stays
+    // the un-multiplied text height, so the caret tracks the glyphs at any
+    // line-height setting.
+    let caret_height = line.ascent + line.descent + line.leading;
     Some([caret_x, caret_y, 2.0, caret_height])
 }
 
