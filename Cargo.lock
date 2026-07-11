@@ -1702,7 +1702,7 @@ dependencies = [
 
 [[package]]
 name = "text-typeset"
-version = "1.6.1"
+version = "1.6.2"
 dependencies = [
  "etagere",
  "fontdb",
