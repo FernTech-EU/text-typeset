@@ -229,22 +229,139 @@ fn generate_underline_rects(
             }
         }
         UnderlineStyle::Wave | UnderlineStyle::SpellCheck => {
-            // Approximate wave with a zigzag of small rects at alternating y offsets.
-            let step = (stroke * 2.0).max(2.0);
-            let amplitude = stroke;
-            let mut cx = x;
-            let mut up = true;
-            while cx < x + width {
-                let seg = step.min(x + width - cx);
-                let wy = if up { y - amplitude } else { y + amplitude };
-                out.push(DecorationRect {
-                    rect: [cx, wy, seg, stroke],
-                    color,
-                    kind: DecorationKind::Underline,
-                });
-                cx += step;
-                up = !up;
-            }
+            generate_wave_rects(x, y, width, stroke, color, out);
         }
+    }
+}
+
+/// Trace a continuous sine "squiggle" (the spell-check / wavy underline) as a
+/// staircase of thin filled bands.
+///
+/// The paint pass renders every `Underline` [`DecorationRect`] as a filled
+/// band — a horizontal line whose thickness is the rect's height — so a wave
+/// cannot be a single rect. Instead we walk the span in small horizontal
+/// steps and, for each step, emit one band whose vertical extent spans the
+/// wave between the two sample points (plus the stroke thickness). Adjacent
+/// bands share an x edge and both cover the wave at that x, so they overlap
+/// and the result is a gap-free wavy stroke of ~`stroke` thickness — not the
+/// disconnected two-height dashes the old zigzag produced.
+fn generate_wave_rects(
+    x: f32,
+    y: f32,
+    width: f32,
+    stroke: f32,
+    color: [f32; 4],
+    out: &mut Vec<DecorationRect>,
+) {
+    if width <= 0.0 {
+        return;
+    }
+    // Amplitude (peak deviation from the mid-line) and wavelength scale off the
+    // underline thickness so the squiggle grows with the font size; the floors
+    // keep it visibly wavy at body sizes where `stroke` rounds to ~1px.
+    let amplitude = (stroke * 1.3).max(1.5);
+    let wavelength = (amplitude * 4.0).max(6.0);
+    // Sample finely so the diagonal bands stay thin (near-uniform thickness)
+    // and always overlap their neighbours on the steep parts of the curve.
+    let step = (wavelength / 12.0).clamp(0.5, 1.5);
+    let half = stroke * 0.5;
+    let tau = std::f32::consts::TAU;
+    // `y` is the straight-underline mid-line; centring the wave there would let
+    // its upper peaks ride up into the glyph descenders. Drop the centre by the
+    // amplitude so the wave's *top* peak sits at the normal underline line (the
+    // clearance a straight underline already has) and the squiggle dips below.
+    let centre = y + amplitude;
+    let wave_at = |cx: f32| centre + amplitude * ((cx - x) / wavelength * tau).sin();
+
+    let end = x + width;
+    let mut cx = x;
+    while cx < end {
+        let seg = step.min(end - cx);
+        let y0 = wave_at(cx);
+        let y1 = wave_at(cx + seg);
+        let top = y0.min(y1) - half;
+        let bottom = y0.max(y1) + half;
+        out.push(DecorationRect {
+            rect: [cx, top, seg, bottom - top],
+            color,
+            kind: DecorationKind::Underline,
+        });
+        cx += step;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+
+    fn wave_rects(x: f32, width: f32, stroke: f32) -> Vec<DecorationRect> {
+        let mut out = Vec::new();
+        generate_underline_rects(
+            x,
+            10.0,
+            width,
+            stroke,
+            UnderlineStyle::SpellCheck,
+            RED,
+            &mut out,
+        );
+        out
+    }
+
+    /// The wavy underline must be a *connected* stroke: consecutive bands have
+    /// to overlap vertically so the squiggle reads as one continuous line, not
+    /// the disconnected two-height dashes the old zigzag produced. (The old
+    /// implementation emitted `[cx, y±amp, seg, stroke]` bars whose y-intervals
+    /// were `[y-1.5, y-0.5]` and `[y+0.5, y+1.5]` — provably non-overlapping.)
+    #[test]
+    fn spellcheck_wave_is_a_connected_stroke() {
+        let rects = wave_rects(0.0, 60.0, 1.0);
+        assert!(
+            rects.len() > 20,
+            "a 60px squiggle should be sampled into many small bands, got {}",
+            rects.len()
+        );
+
+        for pair in rects.windows(2) {
+            let (a, b) = (pair[0].rect, pair[1].rect);
+            // Horizontally adjacent (share an x edge).
+            assert!(
+                (b[0] - (a[0] + a[2])).abs() < 0.5,
+                "bands must tile the span with no horizontal gap"
+            );
+            // Vertically overlapping (both cover the shared sample ± half-stroke).
+            let (a_top, a_bot) = (a[1], a[1] + a[3]);
+            let (b_top, b_bot) = (b[1], b[1] + b[3]);
+            assert!(
+                a_bot >= b_top && b_bot >= a_top,
+                "adjacent wave bands must overlap vertically (y {a_top}..{a_bot} vs {b_top}..{b_bot})"
+            );
+        }
+    }
+
+    /// It must actually undulate: the band mid-lines span roughly the full
+    /// peak-to-peak of the wave, not sit flat like a single underline.
+    #[test]
+    fn spellcheck_wave_undulates() {
+        let rects = wave_rects(0.0, 60.0, 1.0);
+        let mids: Vec<f32> = rects.iter().map(|r| r.rect[1] + r.rect[3] * 0.5).collect();
+        let min = mids.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max = mids.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        // amplitude floor is 1.5 → peak-to-peak ≥ ~3px; allow slack for sampling.
+        assert!(
+            max - min > 2.5,
+            "wave should span ≥ ~2×amplitude vertically, got {}",
+            max - min
+        );
+        // Every band stays within the underline offset's neighbourhood.
+        assert!(rects.iter().all(|r| r.kind == DecorationKind::Underline));
+    }
+
+    #[test]
+    fn zero_width_wave_emits_nothing() {
+        assert!(wave_rects(5.0, 0.0, 1.0).is_empty());
+        assert!(wave_rects(5.0, -3.0, 1.0).is_empty());
     }
 }
