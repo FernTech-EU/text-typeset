@@ -423,6 +423,103 @@ impl FlowLayout {
         removed_height
     }
 
+    /// Declare the total extent of a uniform-row-height document without
+    /// shaping anything.
+    ///
+    /// In windowed mode `content_height` describes the whole document, not the
+    /// shaped window, so it cannot come from the usual accumulator. Use this to
+    /// keep the scrollbar honest when the row count changes outside the shaped
+    /// window (a line appended while the user is scrolled away from the tail).
+    ///
+    /// Leaves the shaped window untouched.
+    pub fn set_uniform_extent(&mut self, total_rows: usize, row_height: f32) {
+        self.content_height = total_rows as f32 * row_height;
+    }
+
+    /// Shape only `window` — a slice of a much larger uniform-row-height
+    /// document — placing each row at an arithmetic `y = index * row_height`.
+    ///
+    /// Shaping every line is what makes a large document expensive: a resident
+    /// shaped line costs ~6.5 KB, so a 100 000-line buffer costs ~623 MB fully
+    /// laid out, against ~1 MB for a viewport-sized window
+    /// (`docs/streaming-baseline.md`). Rendering already culls to the viewport,
+    /// so shaping the off-screen remainder buys nothing.
+    ///
+    /// `y` is arithmetic rather than accumulated precisely so that a row can be
+    /// placed without having laid out — or even having in memory — any of the
+    /// rows above it, which is what lets the window start at an arbitrary
+    /// scroll position. `content_height` is likewise derived from
+    /// `total_rows`, so the scrollbar reflects the whole document rather than
+    /// the shaped window.
+    ///
+    /// # Invariants
+    ///
+    /// The arithmetic placement is only correct for a document whose rows are
+    /// genuinely uniform: **one row = one visual line of exactly `row_height`**
+    /// — no wrapping (`non_breakable_lines`), no embedded newlines, no
+    /// per-row margins, one font size throughout. That suits log/console
+    /// output and monospaced code; it does not suit prose. Callers with
+    /// variable-height content must use [`layout_blocks`](Self::layout_blocks).
+    /// `window` must be sorted ascending by index, which keeps `flow_order`
+    /// ascending by `y` as `hit_test`'s binary search requires. Both are
+    /// checked in debug builds.
+    ///
+    /// After this call, appending at the tail with
+    /// [`append_block`](Self::append_block) stays correct: `content_height` is
+    /// exactly `total_rows * row_height`, which is where row `total_rows`
+    /// belongs. Trim the window's front with
+    /// [`remove_leading`](Self::remove_leading).
+    pub fn layout_window(
+        &mut self,
+        registry: &FontRegistry,
+        window: &[(usize, BlockLayoutParams)],
+        total_rows: usize,
+        row_height: f32,
+        available_width: f32,
+    ) {
+        debug_assert!(
+            window.windows(2).all(|w| w[0].0 < w[1].0),
+            "layout_window: window must be sorted ascending by row index, else \
+             flow_order stops being ascending by y and hit_test's binary search \
+             silently misreports rows"
+        );
+
+        self.clear();
+        for (index, params) in window {
+            let mut block = layout_block(
+                registry,
+                params,
+                available_width,
+                self.scale_factor,
+                self.font_scale,
+            );
+            debug_assert!(
+                (block.height - row_height).abs() < 0.5,
+                "layout_window: row {index} laid out {:.2}px tall against a \
+                 declared row_height of {row_height:.2}px — the row is not a \
+                 single unwrapped line, so arithmetic y placement would drift",
+                block.height
+            );
+
+            let y = *index as f32 * row_height;
+            block.y = y;
+            self.flow_order.push(FlowItem::Block {
+                block_id: block.block_id,
+                y,
+                height: block.height,
+            });
+            self.update_max_width_for_block(&block);
+            self.blocks.insert(block.block_id, block);
+        }
+
+        // Describes the whole document, not the shaped window — so the
+        // scrollbar spans everything even though almost none of it is shaped.
+        self.set_uniform_extent(total_rows, row_height);
+        // O(window), not O(document): the bulk path's cost is bounded by what
+        // is actually resident.
+        self.refresh_base_blocks();
+    }
+
     /// Lay out a sequence of blocks vertically.
     pub fn layout_blocks(
         &mut self,

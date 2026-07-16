@@ -50,7 +50,7 @@ Raw text is cheap by comparison — 65 B/line in the rope, ~6.5 MB at 100 k.
 
 ## What this implies for the design
 
-1. `DocumentFlow::append_block` — a thin wrapper over the already-O(1) `FlowLayout::add_block`.
+1. `DocumentFlow::add_block` — a thin wrapper over the already-O(1) `FlowLayout::add_block`.
    Kills the 1.17 s/line cliff. Low risk.
 2. `DocumentFlow::layout_window` (uniform row height, arithmetic `y = idx * row_height`) — required
    by the **memory** result, not by render. Keeps only a window shaped. This is the one genuinely
@@ -59,3 +59,39 @@ Raw text is cheap by comparison — 65 B/line in the rope, ~6.5 MB at 100 k.
 3. `DocumentFlow::remove_leading` — trims the resident window's front. Absolute `y` values of
    survivors are left untouched (the region above simply becomes empty and is scrolled past), so
    this is O(n_removed) plus a `Vec` memmove — no reshape, no y rewrite.
+
+---
+
+# After
+
+Same bench, after the change. Both goals met, and both are now **flat in N**.
+
+## Appending one line (`DocumentFlow::add_block`)
+
+| N | before | after | speedup |
+|---:|---:|---:|---:|
+| 1 000 | 11.5 ms | 11.3 µs | 1 018× |
+| 10 000 | 117.6 ms | 10.4 µs | 11 313× |
+| 100 000 | 1.175 s | 10.7 µs | **109 386×** |
+
+Flat at any N — the cost is shaping the one new line and nothing else. The measurement is of
+`append_block` (base-overlay capture included), not the raw `add_block`, so the ~0.7 µs the base
+clone adds is counted.
+
+## Holding a large document (`DocumentFlow::layout_window`, 100-row window)
+
+| N | window layout | memory | vs. fully resident |
+|---:|---:|---:|---:|
+| 1 000 | 966 µs | 3.7 MB | 10.8 MB |
+| 10 000 | 960 µs | 3.7 MB | 68.1 MB |
+| 100 000 | 965 µs | **3.7 MB** | 622.9 MB → **168× less** |
+
+Memory is flat in N: only the window is shaped, and `content_height` still spans the whole document,
+so the scrollbar stays honest. Window layout is likewise flat (O(window), not O(N)). The residual
+3.7 MB is font data and the glyph atlas — fixed overhead, not per-line.
+
+## Regression
+
+446 → 458 tests passing, 0 failed (12 added). Clippy and rustfmt clean. Every addition is a new
+method; `layout_full` / `layout_blocks` / `relayout_block` / `add_block` are untouched, so
+`RichTextEditor`'s path is byte-for-byte what it was.

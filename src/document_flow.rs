@@ -526,6 +526,67 @@ impl DocumentFlow {
         self.flow_layout.remove_leading(n)
     }
 
+    /// Shape only `window` — a slice of a much larger uniform-row-height
+    /// document — placing each row at `y = index * row_height`.
+    ///
+    /// The memory counterpart of [`add_block`](Self::add_block): `add_block`
+    /// makes *growing* a buffer cheap, this makes *holding* a large one cheap.
+    /// A resident shaped line costs ~6.5 KB, so a fully laid-out 100 000-line
+    /// buffer costs ~623 MB, against ~1 MB for a viewport-sized window; render
+    /// already culls to the viewport, so shaping the rest buys nothing. See
+    /// `docs/streaming-baseline.md`.
+    ///
+    /// `content_height` is derived from `total_rows`, so the scrollbar spans
+    /// the whole document even though almost none of it is shaped. Re-call this
+    /// when the visible range moves; append at the tail with
+    /// [`add_block`](Self::add_block) and trim the front with
+    /// [`remove_leading`](Self::remove_leading) while following output, which
+    /// avoids re-shaping the window on every line.
+    ///
+    /// # Invariants
+    ///
+    /// Correct only for genuinely uniform rows: **one row = one visual line of
+    /// exactly `row_height`** — no wrapping, no embedded newlines, no per-row
+    /// margins, one font size throughout (log/console output, monospaced
+    /// code). Variable-height or wrapped content must use
+    /// [`layout_blocks`](Self::layout_blocks) / [`layout_full`](Self::layout_full).
+    /// `window` must be sorted ascending by index. Both are checked in debug
+    /// builds.
+    ///
+    /// Rows outside the window are not laid out, so
+    /// [`block_visual_info`](Self::block_visual_info) and hit-testing answer
+    /// only for resident rows; derive off-window geometry arithmetically from
+    /// `row_height`.
+    pub fn layout_window(
+        &mut self,
+        service: &TextFontService,
+        window: &[(usize, BlockLayoutParams)],
+        total_rows: usize,
+        row_height: f32,
+    ) {
+        self.flow_layout.scale_factor = service.scale_factor;
+        self.flow_layout.font_scale = self.font_scale;
+        self.flow_layout.layout_window(
+            &service.font_registry,
+            window,
+            total_rows,
+            row_height,
+            self.layout_width(),
+        );
+        self.note_layout_done(service);
+    }
+
+    /// Declare the total extent of a uniform-row-height document without
+    /// shaping anything.
+    ///
+    /// Keeps the scrollbar honest when the row count changes outside the shaped
+    /// window — a line appended while the user is scrolled away from the tail,
+    /// where [`add_block`](Self::add_block) would wrongly shape a row nowhere
+    /// near the window. Leaves the shaped window untouched.
+    pub fn set_uniform_extent(&mut self, total_rows: usize, row_height: f32) {
+        self.flow_layout.set_uniform_extent(total_rows, row_height);
+    }
+
     /// Append a frame to the current flow. The frame's position
     /// (inline, float, absolute) is carried in `params`.
     pub fn add_frame(&mut self, service: &TextFontService, params: &FrameLayoutParams) {

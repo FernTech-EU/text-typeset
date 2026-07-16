@@ -1026,6 +1026,204 @@ fn remove_leading_saturates_past_the_end() {
     );
 }
 
+// ── layout_window (virtualized uniform-row documents) ───────────
+
+/// Build a uniform-row window: rows `range` of a `total`-row document.
+fn make_window(
+    range: std::ops::Range<usize>,
+) -> Vec<(usize, text_typeset::layout::block::BlockLayoutParams)> {
+    range
+        .map(|i| (i, make_block(i + 1, "2026-07-16 INFO worker: line")))
+        .collect()
+}
+
+/// Measure the natural height of one fixture row, to use as `row_height`.
+fn probe_row_height(ts: &Typesetter) -> f32 {
+    let mut probe = FlowLayout::new();
+    probe.append_block(
+        ts.font_registry(),
+        &make_block(1, "2026-07-16 INFO worker: line"),
+        4000.0,
+    );
+    probe.blocks.get(&1).unwrap().height
+}
+
+/// The point of windowing: only the window is shaped, but the flow still
+/// reports the *whole* document's height, so the scrollbar stays honest.
+#[test]
+fn layout_window_shapes_only_the_window_but_spans_the_document() {
+    let ts = make_typesetter();
+    let h = probe_row_height(&ts);
+    let mut flow = FlowLayout::new();
+
+    flow.layout_window(
+        ts.font_registry(),
+        &make_window(500..520),
+        100_000,
+        h,
+        4000.0,
+    );
+
+    assert_eq!(flow.blocks.len(), 20, "only the window may be shaped");
+    assert!(
+        (flow.content_height - 100_000.0 * h).abs() < 0.5,
+        "content_height must span all 100k rows, got {} vs {}",
+        flow.content_height,
+        100_000.0 * h
+    );
+}
+
+/// Arithmetic placement is the whole trick: a row must land at
+/// `index * row_height` without any row above it having been laid out.
+#[test]
+fn layout_window_places_rows_arithmetically() {
+    let ts = make_typesetter();
+    let h = probe_row_height(&ts);
+    let mut flow = FlowLayout::new();
+
+    flow.layout_window(
+        ts.font_registry(),
+        &make_window(500..520),
+        100_000,
+        h,
+        4000.0,
+    );
+
+    for index in 500..520 {
+        let y = flow.blocks.get(&(index + 1)).unwrap().y;
+        let expected = index as f32 * h;
+        assert!(
+            (y - expected).abs() < 0.5,
+            "row {index} at y={y}, expected {expected}"
+        );
+    }
+}
+
+/// A window is a slice of the same document a bulk layout would produce, so
+/// the rows it shapes must land exactly where a full layout puts them.
+/// Divergence here would make a virtualized view disagree with a plain one.
+#[test]
+fn layout_window_agrees_with_bulk_layout_on_shared_rows() {
+    let ts = make_typesetter();
+    let h = probe_row_height(&ts);
+
+    let mut bulk = FlowLayout::new();
+    let all: Vec<_> = make_window(0..40).into_iter().map(|(_, p)| p).collect();
+    bulk.layout_blocks(ts.font_registry(), all, 4000.0);
+
+    let mut windowed = FlowLayout::new();
+    windowed.layout_window(ts.font_registry(), &make_window(20..30), 40, h, 4000.0);
+
+    for index in 20..30 {
+        let a = bulk.blocks.get(&(index + 1)).unwrap().y;
+        let b = windowed.blocks.get(&(index + 1)).unwrap().y;
+        assert!(
+            (a - b).abs() < 0.5,
+            "row {index}: bulk y={a}, windowed y={b} — a virtualized view would \
+             not line up with a fully laid-out one"
+        );
+    }
+    assert!((bulk.content_height - windowed.content_height).abs() < 0.5);
+}
+
+/// The composition the streaming path depends on: after windowing to the tail,
+/// `append_block` must still land the next row in the right place, because
+/// `content_height` is exactly `total_rows * row_height`. This is what lets a
+/// follow-the-tail view append in O(1) instead of re-shaping its window per
+/// line.
+#[test]
+fn append_block_after_layout_window_continues_the_document() {
+    let ts = make_typesetter();
+    let h = probe_row_height(&ts);
+    let mut flow = FlowLayout::new();
+
+    // Window sits on the tail: rows 90..100 of a 100-row document.
+    flow.layout_window(ts.font_registry(), &make_window(90..100), 100, h, 4000.0);
+
+    // Row 100 arrives.
+    flow.append_block(
+        ts.font_registry(),
+        &make_block(101, "2026-07-16 INFO worker: line"),
+        4000.0,
+    );
+
+    let y = flow.blocks.get(&101).unwrap().y;
+    let expected = 100.0 * h;
+    assert!(
+        (y - expected).abs() < 0.5,
+        "appended row landed at y={y}, expected {expected} — tail append does \
+         not compose with a windowed layout"
+    );
+}
+
+/// Rows outside the window are deliberately not resident; callers must derive
+/// their geometry arithmetically rather than expect a lookup to answer.
+#[test]
+fn layout_window_leaves_off_window_rows_unshaped() {
+    let ts = make_typesetter();
+    let h = probe_row_height(&ts);
+    let mut flow = FlowLayout::new();
+
+    flow.layout_window(
+        ts.font_registry(),
+        &make_window(500..520),
+        100_000,
+        h,
+        4000.0,
+    );
+
+    assert!(!flow.blocks.contains_key(&1), "row 0 must not be resident");
+    assert!(
+        !flow.blocks.contains_key(&90_000),
+        "row 89999 must not be resident"
+    );
+}
+
+/// `hit_test` binary-searches `flow_order` assuming ascending `y`.
+#[test]
+fn layout_window_flow_order_is_ascending() {
+    let ts = make_typesetter();
+    let h = probe_row_height(&ts);
+    let mut flow = FlowLayout::new();
+
+    flow.layout_window(
+        ts.font_registry(),
+        &make_window(500..520),
+        100_000,
+        h,
+        4000.0,
+    );
+
+    let ys: Vec<f32> = flow
+        .flow_order
+        .iter()
+        .map(|item| match item {
+            FlowItem::Block { y, .. } | FlowItem::Table { y, .. } | FlowItem::Frame { y, .. } => *y,
+        })
+        .collect();
+    assert!(ys.windows(2).all(|w| w[0] <= w[1]), "not ascending: {ys:?}");
+}
+
+/// A row appended outside the shaped window must still move the scrollbar.
+#[test]
+fn set_uniform_extent_updates_height_without_shaping() {
+    let ts = make_typesetter();
+    let h = probe_row_height(&ts);
+    let mut flow = FlowLayout::new();
+
+    flow.layout_window(ts.font_registry(), &make_window(0..10), 100, h, 4000.0);
+    let resident = flow.blocks.len();
+
+    flow.set_uniform_extent(101, h);
+
+    assert!((flow.content_height - 101.0 * h).abs() < 0.5);
+    assert_eq!(
+        flow.blocks.len(),
+        resident,
+        "extent must not shape anything"
+    );
+}
+
 // ── relayout with margin changes ────────────────────────────────
 
 #[test]

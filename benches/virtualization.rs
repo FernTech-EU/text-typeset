@@ -229,4 +229,69 @@ fn bench_resident_cost() {
     println!("{:-<78}", "");
     println!("render = DocumentFlow::render() with viewport culling over all N flow items");
     println!();
+
+    bench_windowed();
+}
+
+/// The same N-line documents, but shaping only a viewport-sized window via
+/// `layout_window` instead of every line.
+///
+/// Rendering already culls to the viewport, so the off-screen remainder was
+/// only ever costing memory. This is what that costs instead.
+fn bench_windowed() {
+    /// Visible rows at 800x600 plus overscan.
+    const WINDOW: usize = 100;
+
+    println!("Same documents, shaping only a {WINDOW}-row window (layout_window)");
+    println!("{:-<78}", "");
+    println!(
+        "{:>9}  {:>14}  {:>14}  {:>16}",
+        "N", "window layout", "memory", "vs resident"
+    );
+    println!("{:-<78}", "");
+
+    for n in SIZES {
+        let before = live_bytes();
+        let mut ts = make_typesetter();
+        ts.set_viewport(800.0, 600.0);
+
+        // Probe one row's natural height: uniform rows means this is every
+        // row's height, and it needs no document-wide layout to learn.
+        let row_height = {
+            let mut probe = FlowLayout::new();
+            probe.append_block(ts.font_registry(), &make_block(1, LINE), WIDTH);
+            probe.blocks.get(&1).unwrap().height
+        };
+
+        // Window on the tail — the steady state of a view following output.
+        let first = n.saturating_sub(WINDOW);
+        let window: Vec<(usize, BlockLayoutParams)> =
+            (first..n).map(|i| (i, make_block(i + 1, LINE))).collect();
+
+        let layout = median(
+            (0..REPS)
+                .map(|_| {
+                    let start = Instant::now();
+                    ts.flow.layout_window(&ts.service, &window, n, row_height);
+                    let elapsed = start.elapsed();
+                    std::hint::black_box(ts.flow.content_height());
+                    elapsed
+                })
+                .collect(),
+        );
+
+        let resident = live_bytes().saturating_sub(before);
+        println!(
+            "{:>9}  {:>14}  {:>14}  {:>16}",
+            n,
+            format!("{:?}", layout),
+            format!("{:.1} MB", resident as f64 / (1024.0 * 1024.0)),
+            format!("{} rows shaped", WINDOW.min(n))
+        );
+    }
+
+    println!("{:-<78}", "");
+    println!("memory is now flat in N: only the window is shaped, and");
+    println!("content_height still spans the whole document (scrollbar stays honest)");
+    println!();
 }
