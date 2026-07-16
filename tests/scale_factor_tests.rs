@@ -6,11 +6,11 @@
 mod helpers;
 
 use helpers::{NOTO_SANS, Typesetter, make_block, make_typesetter};
-use text_typeset::TextFormat;
 use text_typeset::font::resolve::resolve_font;
 use text_typeset::layout::block::layout_block;
 use text_typeset::layout::flow::FlowLayout;
 use text_typeset::shaping::shaper::{font_metrics_px, shape_text};
+use text_typeset::{RelayoutError, TextFormat};
 
 const TEXT: &str = "Hello, world!";
 
@@ -495,4 +495,68 @@ fn changing_scale_factor_resets_atlas_and_relayout_repopulates() {
     // (It is either the same initial atlas or has grown; either
     // way its width is at least the initial 512.)
     assert!(before_atlas_w >= 512);
+}
+
+// ── incremental append vs. a stale scale ────────────────────────
+
+/// `add_block` must refuse to append against a layout shaped at a different
+/// scale, exactly as `relayout_block` does.
+///
+/// The danger is not the one appended block, it is that appending would
+/// *stamp the flow as current*: `note_layout_done` re-records the service's
+/// scale generation, so `layout_dirty_for_scale` would flip back to false and
+/// the caller's "I must re-layout" signal would be destroyed — leaving every
+/// pre-existing block shaped at the old scale forever, silently. A streaming
+/// consumer appends constantly, so a HiDPI change mid-stream would hit this
+/// almost immediately.
+#[test]
+fn add_block_refuses_a_stale_scale_and_preserves_the_dirty_flag() {
+    let mut ts = make_typesetter();
+    ts.layout_blocks(vec![make_block(1, "First line.")]);
+    assert!(!ts.flow.layout_dirty_for_scale(&ts.service));
+
+    // HiDPI change: the flow is now stale and the caller must re-layout.
+    ts.set_scale_factor(2.0);
+    assert!(ts.flow.layout_dirty_for_scale(&ts.service));
+
+    let err = ts
+        .flow
+        .add_block(&ts.service, &make_block(2, "Streamed line."));
+    assert!(
+        matches!(err, Err(RelayoutError::ScaleDirty)),
+        "add_block must reject a stale-scale append, got {err:?}"
+    );
+
+    assert!(
+        ts.flow.layout_dirty_for_scale(&ts.service),
+        "the rejected append must leave the dirty flag standing — clearing it \
+         would strand every existing block at the old scale forever"
+    );
+    assert!(
+        ts.flow.block_visual_info(2).is_none(),
+        "a rejected append must not leave a half-applied block behind"
+    );
+
+    // The documented recovery re-establishes a clean, single-scale flow.
+    ts.layout_blocks(vec![make_block(1, "First line.")]);
+    assert!(!ts.flow.layout_dirty_for_scale(&ts.service));
+    assert!(
+        ts.flow
+            .add_block(&ts.service, &make_block(2, "Streamed line."))
+            .is_ok(),
+        "append must succeed once the flow is re-laid-out at the new scale"
+    );
+}
+
+/// Appending to a flow that has never been laid out is how an append-only
+/// buffer starts, so it must not be treated as a scale conflict.
+#[test]
+fn add_block_on_a_fresh_flow_is_not_scale_dirty() {
+    let ts = make_typesetter();
+    let mut flow = text_typeset::DocumentFlow::new();
+    assert!(
+        flow.add_block(&ts.service, &make_block(1, "First streamed line."))
+            .is_ok(),
+        "appending to an empty flow must be allowed"
+    );
 }

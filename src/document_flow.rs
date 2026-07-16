@@ -501,19 +501,47 @@ impl DocumentFlow {
     /// as its `y` (margin-collapsed against the previous block, exactly as a
     /// bulk layout would place it), so an append-only sequence produces a flow
     /// identical to laying the same blocks out in one call.
-    pub fn add_block(&mut self, service: &TextFontService, params: &BlockLayoutParams) {
+    ///
+    /// # Invariants
+    ///
+    /// Like [`relayout_block`](Self::relayout_block), this is an incremental
+    /// operation, so it must not run against a layout shaped at a different
+    /// HiDPI scale: appending at the current scale while every existing block
+    /// sits at the old one would leave the flow permanently mixed-scale — and
+    /// worse, stamping the flow as freshly laid out would clear the very
+    /// staleness flag ([`layout_dirty_for_scale`](Self::layout_dirty_for_scale))
+    /// the caller relies on to know it must re-layout. Returns
+    /// [`RelayoutError::ScaleDirty`] instead; the caller re-runs
+    /// [`layout_full`](Self::layout_full) / [`layout_blocks`](Self::layout_blocks).
+    ///
+    /// Unlike `relayout_block` there is no `NoLayout` error: appending to an
+    /// empty flow is how an append-only buffer legitimately starts.
+    pub fn add_block(
+        &mut self,
+        service: &TextFontService,
+        params: &BlockLayoutParams,
+    ) -> Result<(), RelayoutError> {
+        // Only meaningful once a layout exists; an empty flow has no
+        // established scale to conflict with.
+        if self.has_layout && self.layout_scale_generation != service.scale_generation() {
+            return Err(RelayoutError::ScaleDirty);
+        }
         self.flow_layout.scale_factor = service.scale_factor;
         self.flow_layout.font_scale = self.font_scale;
         self.flow_layout
             .append_block(&service.font_registry, params, self.layout_width());
         self.note_layout_done(service);
+        Ok(())
     }
 
-    /// Drop the first `n` blocks of the flow, returning the height removed.
+    /// Drop the first `n` blocks of the flow, returning how many were removed.
     ///
     /// The eviction half of a bounded streaming buffer: pair it with
-    /// [`add_block`](Self::add_block) to hold a scrollback cap. Cost is O(n)
-    /// plus one `Vec` memmove of the survivors — nothing is reshaped.
+    /// [`add_block`](Self::add_block) to hold a scrollback cap. Usually O(n)
+    /// plus one `Vec` memmove of the survivors — nothing is reshaped. The
+    /// return value is the count actually evicted, which is less than `n` when
+    /// the flow holds fewer leading blocks than that, or a table/frame stops
+    /// the walk.
     ///
     /// Survivors keep their absolute `y`, so the vacated band at the top
     /// becomes empty and `content_height` does not change: content below never
@@ -521,8 +549,10 @@ impl DocumentFlow {
     /// the freed space reclaimed re-run a full [`layout_blocks`](Self::layout_blocks).
     ///
     /// Only leading top-level blocks are evicted; a leading table or frame
-    /// stops the walk.
-    pub fn remove_leading(&mut self, n: usize) -> f32 {
+    /// stops the walk. Evicting the widest block re-derives
+    /// [`max_content_width`](Self::max_content_width) from the survivors, so
+    /// the horizontal scroll range stops describing content that is gone.
+    pub fn remove_leading(&mut self, n: usize) -> usize {
         self.flow_layout.remove_leading(n)
     }
 
@@ -557,6 +587,22 @@ impl DocumentFlow {
     /// [`block_visual_info`](Self::block_visual_info) and hit-testing answer
     /// only for resident rows; derive off-window geometry arithmetically from
     /// `row_height`.
+    ///
+    /// # Behaviour worth knowing
+    ///
+    /// Like [`layout_blocks`](Self::layout_blocks), this drops any paint
+    /// overlay — re-apply spans after re-windowing or the rows render in base
+    /// colours. Since re-windowing happens on every visible-range change, that
+    /// re-apply belongs on the scroll path, not in one-off setup.
+    ///
+    /// [`max_content_width`](Self::max_content_width) reports the widest row
+    /// *seen so far* in this session: not the document's widest (unknowable
+    /// without shaping all of it), and deliberately not the window's widest,
+    /// which would make the horizontal scrollbar jump on every vertical scroll.
+    ///
+    /// `f32` places rows exactly only to 2^24, so past ~840 000 rows at a 20 px
+    /// row height positions begin quantizing — far beyond the target sizes, but
+    /// not unbounded.
     pub fn layout_window(
         &mut self,
         service: &TextFontService,
@@ -583,6 +629,12 @@ impl DocumentFlow {
     /// window — a line appended while the user is scrolled away from the tail,
     /// where [`add_block`](Self::add_block) would wrongly shape a row nowhere
     /// near the window. Leaves the shaped window untouched.
+    ///
+    /// Only meaningful for a flow driven by [`layout_window`](Self::layout_window).
+    /// On a normally laid-out flow this overwrites the accumulated
+    /// `content_height` with a fabricated `total_rows * row_height` that bears
+    /// no relation to the real content, so the scroll range goes wrong; nothing
+    /// in the type distinguishes the two, so this is the caller's contract.
     pub fn set_uniform_extent(&mut self, total_rows: usize, row_height: f32) {
         self.flow_layout.set_uniform_extent(total_rows, row_height);
     }

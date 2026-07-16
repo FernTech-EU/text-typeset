@@ -254,6 +254,12 @@ fn bench_windowed() {
         let before = live_bytes();
         let mut ts = make_typesetter();
         ts.set_viewport(800.0, 600.0);
+        // Pin the layout width so the probe below and `layout_window` agree.
+        // Probing at one width while laying out at another (`layout_width()`,
+        // derived from the viewport) would silently measure a wrapped row as
+        // if it were a single line — and `debug_assert` cannot catch it here,
+        // since benches build with assertions off.
+        ts.set_content_width(WIDTH);
 
         // Probe one row's natural height: uniform rows means this is every
         // row's height, and it needs no document-wide layout to learn.

@@ -312,6 +312,18 @@ impl FlowLayout {
     }
 
     /// Add a single block to the flow at the current y position.
+    ///
+    /// **Bulk-path primitive.** This deliberately does *not* capture the
+    /// block's paint-overlay base; [`layout_blocks`](Self::layout_blocks) calls
+    /// it in a loop and captures every base once at the end, which keeps the
+    /// bulk path single-pass.
+    ///
+    /// Appending to an *existing* layout has no such follow-up pass, so use
+    /// [`append_block`](Self::append_block) instead. Reaching for this one is
+    /// silent when wrong: the block lays out and renders fine, but
+    /// [`apply_block_paint_spans`](Self::apply_block_paint_spans) then
+    /// early-returns `false` for it forever, so it never receives syntax,
+    /// search, or spell highlighting and nothing reports a problem.
     pub fn add_block(
         &mut self,
         registry: &FontRegistry,
@@ -385,11 +397,13 @@ impl FlowLayout {
         self.refresh_base_and_overlay_block(params.block_id);
     }
 
-    /// Drop the first `n` top-level blocks, returning the height removed.
+    /// Drop the first `n` top-level blocks, returning how many were removed.
     ///
     /// The eviction half of a bounded streaming buffer (a log viewer's
-    /// scrollback cap). Cost is O(n) map removals plus one `Vec` memmove of
-    /// the surviving `flow_order` entries — no reshaping.
+    /// scrollback cap). Usually O(n) map removals plus one `Vec` memmove of the
+    /// surviving `flow_order` entries — no reshaping. The return value is the
+    /// count actually evicted, which is less than `n` when the run of leading
+    /// blocks is shorter than `n` or a table/frame stops the walk.
     ///
     /// Surviving blocks deliberately **keep their absolute `y`**. The vacated
     /// band at the top simply becomes empty, and `content_height` is unchanged,
@@ -402,17 +416,26 @@ impl FlowLayout {
     ///
     /// Only top-level blocks are considered; a leading table or frame stops the
     /// eviction (a streaming buffer is a flat run of blocks by construction).
-    /// Returns the total height of the blocks actually removed.
-    pub fn remove_leading(&mut self, n: usize) -> f32 {
-        let mut removed_height = 0.0;
+    ///
+    /// If the widest block in the flow is among those evicted,
+    /// `max_content_width` is recomputed from the survivors — O(remaining) for
+    /// that call only. Evicting narrower blocks (the overwhelmingly common
+    /// case) cannot lower the maximum and skips the recompute.
+    pub fn remove_leading(&mut self, n: usize) -> usize {
         let mut removed = 0;
+        let mut evicted_widest = false;
 
         for item in self.flow_order.iter().take(n) {
             let FlowItem::Block { block_id, .. } = item else {
                 break;
             };
             if let Some(block) = self.blocks.remove(block_id) {
-                removed_height += block.height;
+                // `cached_max_content_width` only ever grows, so it goes stale
+                // exactly when the block that set it leaves. Comparing against
+                // it here keeps the common case O(n).
+                if block_max_width(&block) >= self.cached_max_content_width {
+                    evicted_widest = true;
+                }
             }
             self.base_blocks.remove(block_id);
             self.pending_paint_spans.remove(block_id);
@@ -420,7 +443,30 @@ impl FlowLayout {
         }
 
         self.flow_order.drain(..removed);
-        removed_height
+        if evicted_widest {
+            self.recompute_max_content_width();
+        }
+        removed
+    }
+
+    /// Re-derive `cached_max_content_width` from everything currently laid out.
+    ///
+    /// The cache is a running maximum that only grows, which is fine while a
+    /// flow only ever gains content. Anything that *removes* content has to
+    /// re-derive it, or the horizontal scroll range keeps describing content
+    /// that is no longer there.
+    pub(crate) fn recompute_max_content_width(&mut self) {
+        let mut max: f32 = 0.0;
+        for block in self.blocks.values() {
+            max = max.max(block_max_width(block));
+        }
+        for table in self.tables.values() {
+            max = max.max(table.total_width);
+        }
+        for frame in self.frames.values() {
+            max = max.max(frame.total_width);
+        }
+        self.cached_max_content_width = max;
     }
 
     /// Declare the total extent of a uniform-row-height document without
@@ -469,6 +515,25 @@ impl FlowLayout {
     /// exactly `total_rows * row_height`, which is where row `total_rows`
     /// belongs. Trim the window's front with
     /// [`remove_leading`](Self::remove_leading).
+    ///
+    /// # Behaviour worth knowing
+    ///
+    /// Like [`layout_blocks`](Self::layout_blocks), this drops any paint
+    /// overlay: re-apply spans after re-windowing, or the new rows render in
+    /// base colours. Because this runs on every visible-range change, that
+    /// re-apply is part of the scroll path, not a one-off.
+    ///
+    /// `max_content_width` accumulates across windows rather than being
+    /// re-derived per window: it reports the widest row *seen so far*, not the
+    /// widest row in the document (unknowable without shaping all of it) and
+    /// not the widest row on screen (which would make the horizontal scrollbar
+    /// jump on every vertical scroll). It therefore only grows during a
+    /// windowed session.
+    ///
+    /// `y` is `index * row_height` in `f32`, which represents consecutive
+    /// integers exactly only to 2^24: past ~840 000 rows at a 20 px row height,
+    /// row positions begin quantizing and neighbouring rows drift out of
+    /// alignment. Well beyond the sizes this targets, but not infinite.
     pub fn layout_window(
         &mut self,
         registry: &FontRegistry,
@@ -483,8 +548,22 @@ impl FlowLayout {
              flow_order stops being ascending by y and hit_test's binary search \
              silently misreports rows"
         );
+        debug_assert!(
+            window.last().is_none_or(|(last, _)| *last < total_rows),
+            "layout_window: window reaches row {:?} but the document declares \
+             only {total_rows} rows — those rows would sit below content_height \
+             and be unreachable by scrolling",
+            window.last().map(|(i, _)| *i)
+        );
 
+        // The widest row seen so far must survive the rebuild: re-deriving it
+        // from the window alone would make the horizontal scroll range track
+        // whatever happens to be on screen, so it would jump on every vertical
+        // scroll.
+        let max_width_seen = self.cached_max_content_width;
         self.clear();
+        self.cached_max_content_width = max_width_seen;
+
         for (index, params) in window {
             let mut block = layout_block(
                 registry,
@@ -989,11 +1068,9 @@ impl FlowLayout {
 
     /// Update the cached max content width considering a single block's lines.
     fn update_max_width_for_block(&mut self, block: &BlockLayout) {
-        for line in &block.lines {
-            let w = line.width + block.left_margin + block.right_margin;
-            if w > self.cached_max_content_width {
-                self.cached_max_content_width = w;
-            }
+        let w = block_max_width(block);
+        if w > self.cached_max_content_width {
+            self.cached_max_content_width = w;
         }
     }
 
@@ -1219,6 +1296,20 @@ fn collect_frame_base(f: &FrameLayout, out: &mut Vec<(usize, BlockLayout)>) {
 }
 
 /// Find a block by id across top-level / table cells / frames.
+/// Widest laid-out line of `block`, margins included.
+///
+/// The single definition of "how wide is this block", shared by the running
+/// maximum (`update_max_width_for_block`) and the re-derivation eviction needs
+/// (`recompute_max_content_width`), so the two cannot drift apart and disagree
+/// about the horizontal scroll range.
+fn block_max_width(block: &BlockLayout) -> f32 {
+    block
+        .lines
+        .iter()
+        .map(|line| line.width + block.left_margin + block.right_margin)
+        .fold(0.0_f32, f32::max)
+}
+
 fn find_block_ref(flow: &FlowLayout, block_id: usize) -> Option<&BlockLayout> {
     if let Some(b) = flow.blocks.get(&block_id) {
         return Some(b);

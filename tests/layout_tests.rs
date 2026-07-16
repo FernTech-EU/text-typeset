@@ -943,7 +943,7 @@ fn append_block_captures_paint_overlay_base() {
     );
 }
 
-/// Eviction drops exactly the requested prefix and reports the height it
+/// Eviction drops exactly the requested prefix and reports how many it
 /// removed, leaving the survivors untouched.
 #[test]
 fn remove_leading_drops_prefix_and_keeps_survivors_put() {
@@ -955,16 +955,10 @@ fn remove_leading_drops_prefix_and_keeps_survivors_put() {
 
     let content_height_before = flow.content_height;
     let y3_before = flow.blocks.get(&3).unwrap().y;
-    let h1 = flow.blocks.get(&1).unwrap().height;
-    let h2 = flow.blocks.get(&2).unwrap().height;
 
     let removed = flow.remove_leading(2);
 
-    assert!(
-        (removed - (h1 + h2)).abs() < 0.001,
-        "reported removed height {removed} != actual {}",
-        h1 + h2
-    );
+    assert_eq!(removed, 2, "must report the count actually evicted");
     assert!(!flow.blocks.contains_key(&1) && !flow.blocks.contains_key(&2));
     assert_eq!(flow.flow_order.len(), 3, "flow_order must lose exactly 2");
 
@@ -1015,14 +1009,81 @@ fn remove_leading_saturates_past_the_end() {
         flow.append_block(ts.font_registry(), &make_block(i, "Line."), 800.0);
     }
 
-    flow.remove_leading(99);
+    assert_eq!(
+        flow.remove_leading(99),
+        3,
+        "must report what was actually evicted, not what was asked for"
+    );
 
     assert!(flow.blocks.is_empty());
     assert!(flow.flow_order.is_empty());
     assert_eq!(
         flow.remove_leading(1),
-        0.0,
+        0,
         "evicting an empty flow is a no-op"
+    );
+}
+
+/// The horizontal scroll range must stop describing content that has been
+/// evicted, or a capped log view keeps a phantom-wide scrollbar for the rest
+/// of the session after one long line scrolls off.
+#[test]
+fn remove_leading_shrinks_max_width_when_the_widest_block_is_evicted() {
+    let ts = make_typesetter();
+    let mut flow = FlowLayout::new();
+
+    flow.append_block(
+        ts.font_registry(),
+        &make_block(1, "a very long line that is much wider than all the others"),
+        4000.0,
+    );
+    for i in 2..=4 {
+        flow.append_block(ts.font_registry(), &make_block(i, "short"), 4000.0);
+    }
+
+    let wide = flow.cached_max_content_width;
+    flow.remove_leading(1);
+
+    assert!(
+        flow.cached_max_content_width < wide,
+        "max width stayed at {wide} after evicting the widest block — the \
+         horizontal scrollbar would keep spanning content that is gone"
+    );
+    let widest_survivor = flow
+        .blocks
+        .values()
+        .flat_map(|b| {
+            b.lines
+                .iter()
+                .map(move |l| l.width + b.left_margin + b.right_margin)
+        })
+        .fold(0.0_f32, f32::max);
+    assert!(
+        (flow.cached_max_content_width - widest_survivor).abs() < 0.001,
+        "max width must be re-derived from the survivors"
+    );
+}
+
+/// Evicting narrower blocks cannot lower the maximum, so it must be left alone
+/// — that is what keeps the common eviction O(n) instead of O(remaining).
+#[test]
+fn remove_leading_keeps_max_width_when_a_narrow_block_is_evicted() {
+    let ts = make_typesetter();
+    let mut flow = FlowLayout::new();
+
+    flow.append_block(ts.font_registry(), &make_block(1, "short"), 4000.0);
+    flow.append_block(
+        ts.font_registry(),
+        &make_block(2, "a very long line that is much wider than all the others"),
+        4000.0,
+    );
+
+    let wide = flow.cached_max_content_width;
+    flow.remove_leading(1);
+
+    assert!(
+        (flow.cached_max_content_width - wide).abs() < 0.001,
+        "evicting a narrow block must not disturb the maximum"
     );
 }
 
@@ -1202,6 +1263,36 @@ fn layout_window_flow_order_is_ascending() {
         })
         .collect();
     assert!(ys.windows(2).all(|w| w[0] <= w[1]), "not ascending: {ys:?}");
+}
+
+/// The horizontal scroll range must not collapse to "widest row currently on
+/// screen", or the h-scrollbar resizes every time the user scrolls vertically.
+#[test]
+fn layout_window_keeps_max_width_across_windows() {
+    let ts = make_typesetter();
+    let h = probe_row_height(&ts);
+    let mut flow = FlowLayout::new();
+
+    // A window containing one very wide row.
+    let wide_window = vec![
+        (
+            0,
+            make_block(1, "a very long line that is much wider than the rest"),
+        ),
+        (1, make_block(2, "short")),
+    ];
+    flow.layout_window(ts.font_registry(), &wide_window, 1000, h, 4000.0);
+    let wide = flow.cached_max_content_width;
+
+    // Scroll far away, to a window of only short rows.
+    flow.layout_window(ts.font_registry(), &make_window(500..510), 1000, h, 4000.0);
+
+    assert!(
+        (flow.cached_max_content_width - wide).abs() < 0.001,
+        "max width dropped from {wide} to {} after scrolling to a narrower \
+         window — the horizontal scrollbar would jump on every vertical scroll",
+        flow.cached_max_content_width
+    );
 }
 
 /// A row appended outside the shaped window must still move the scrollbar.
