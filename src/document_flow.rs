@@ -485,6 +485,47 @@ impl DocumentFlow {
         self.note_layout_done(service);
     }
 
+    /// Append a block to the current flow, in O(1).
+    ///
+    /// The block counterpart of [`add_frame`](Self::add_frame) /
+    /// [`add_table`](Self::add_table), and the incremental alternative to
+    /// re-running [`layout_blocks`](Self::layout_blocks) after content grows.
+    ///
+    /// Streaming consumers (a log/console view tailing output) need this: a
+    /// full re-layout is O(N) in the whole document, so appending one line to
+    /// a 100 000-line buffer costs over a second, while this stays flat at the
+    /// cost of shaping the one new line, whatever the buffer already holds.
+    /// See `docs/streaming-baseline.md` for the measurements.
+    ///
+    /// Appends at the tail: the new block takes the current `content_height`
+    /// as its `y` (margin-collapsed against the previous block, exactly as a
+    /// bulk layout would place it), so an append-only sequence produces a flow
+    /// identical to laying the same blocks out in one call.
+    pub fn add_block(&mut self, service: &TextFontService, params: &BlockLayoutParams) {
+        self.flow_layout.scale_factor = service.scale_factor;
+        self.flow_layout.font_scale = self.font_scale;
+        self.flow_layout
+            .append_block(&service.font_registry, params, self.layout_width());
+        self.note_layout_done(service);
+    }
+
+    /// Drop the first `n` blocks of the flow, returning the height removed.
+    ///
+    /// The eviction half of a bounded streaming buffer: pair it with
+    /// [`add_block`](Self::add_block) to hold a scrollback cap. Cost is O(n)
+    /// plus one `Vec` memmove of the survivors — nothing is reshaped.
+    ///
+    /// Survivors keep their absolute `y`, so the vacated band at the top
+    /// becomes empty and `content_height` does not change: content below never
+    /// moves, and the viewport stays where the user put it. Callers that want
+    /// the freed space reclaimed re-run a full [`layout_blocks`](Self::layout_blocks).
+    ///
+    /// Only leading top-level blocks are evicted; a leading table or frame
+    /// stops the walk.
+    pub fn remove_leading(&mut self, n: usize) -> f32 {
+        self.flow_layout.remove_leading(n)
+    }
+
     /// Append a frame to the current flow. The frame's position
     /// (inline, float, absolute) is carried in `params`.
     pub fn add_frame(&mut self, service: &TextFontService, params: &FrameLayoutParams) {

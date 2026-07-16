@@ -4,8 +4,8 @@ use helpers::{
 };
 
 use text_typeset::font::resolve::resolve_font;
-use text_typeset::layout::block::layout_block;
-use text_typeset::layout::flow::FlowLayout;
+use text_typeset::layout::block::{PaintSpan, layout_block};
+use text_typeset::layout::flow::{FlowItem, FlowLayout};
 use text_typeset::layout::frame::{FrameBorderStyle, FrameLayoutParams, FramePosition};
 use text_typeset::layout::paragraph::{Alignment, break_into_lines};
 use text_typeset::layout::table::{CellLayoutParams, TableLayoutParams};
@@ -847,6 +847,182 @@ fn layout_blocks_matches_add_block_sequence() {
         "block 2 y mismatch: {} vs {}",
         y2_a,
         y2_b
+    );
+}
+
+// ── append_block / remove_leading (streaming buffers) ───────────
+
+/// The core guarantee of the tail-append path: growing a flow one block at a
+/// time must land every block exactly where laying the same blocks out in one
+/// bulk call would, margin collapsing included. If these ever diverge, a
+/// streaming view would drift out of alignment with a re-laid-out one.
+#[test]
+fn append_block_matches_bulk_layout() {
+    let ts = make_typesetter();
+
+    let mut b1 = make_block(1, "First paragraph.");
+    b1.top_margin = 10.0;
+    b1.bottom_margin = 20.0;
+    let mut b2 = make_block(2, "Second paragraph.");
+    b2.top_margin = 15.0;
+    b2.bottom_margin = 5.0;
+    let b3 = make_block(3, "Third paragraph.");
+
+    let mut bulk = FlowLayout::new();
+    bulk.layout_blocks(
+        ts.font_registry(),
+        vec![b1.clone(), b2.clone(), b3.clone()],
+        800.0,
+    );
+
+    let mut streamed = FlowLayout::new();
+    for params in [&b1, &b2, &b3] {
+        streamed.append_block(ts.font_registry(), params, 800.0);
+    }
+
+    assert!(
+        (bulk.content_height - streamed.content_height).abs() < 0.001,
+        "content_height mismatch: bulk={}, appended={}",
+        bulk.content_height,
+        streamed.content_height
+    );
+    for id in [1, 2, 3] {
+        let a = bulk.blocks.get(&id).unwrap().y;
+        let b = streamed.blocks.get(&id).unwrap().y;
+        assert!(
+            (a - b).abs() < 0.001,
+            "block {id} y mismatch: bulk={a}, appended={b}"
+        );
+    }
+}
+
+/// `add_block` leaves `base_blocks` untouched (a bulk layout re-captures every
+/// base in one pass afterwards). `append_block` has no such pass to fall back
+/// on, so it must capture the appended block's base itself.
+///
+/// The failure this guards is **silent**: `apply_block_paint_spans` early-returns
+/// `false` for a block with no captured base rather than clobbering it, so a
+/// streamed-in block would simply never receive syntax / search / spell
+/// highlighting, with nothing anywhere reporting a problem.
+#[test]
+fn append_block_captures_paint_overlay_base() {
+    let ts = make_typesetter();
+    let mut flow = FlowLayout::new();
+
+    flow.append_block(ts.font_registry(), &make_block(1, "Streamed line."), 800.0);
+
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    let applied = flow.apply_block_paint_spans(
+        1,
+        &[PaintSpan {
+            char_start: 0,
+            char_end: 4,
+            foreground_color: Some(RED),
+            ..Default::default()
+        }],
+    );
+
+    assert!(
+        applied,
+        "appended block has no captured base, so paint overlays silently do not \
+         apply to it — a streamed line would never get highlighted"
+    );
+
+    let reds = flow
+        .blocks
+        .get(&1)
+        .unwrap()
+        .lines
+        .iter()
+        .flat_map(|line| &line.runs)
+        .filter(|run| run.decorations.foreground_color == Some(RED))
+        .count();
+    assert!(
+        reds > 0,
+        "overlay reported applied but no run took the colour"
+    );
+}
+
+/// Eviction drops exactly the requested prefix and reports the height it
+/// removed, leaving the survivors untouched.
+#[test]
+fn remove_leading_drops_prefix_and_keeps_survivors_put() {
+    let ts = make_typesetter();
+    let mut flow = FlowLayout::new();
+    for i in 1..=5 {
+        flow.append_block(ts.font_registry(), &make_block(i, "Line."), 800.0);
+    }
+
+    let content_height_before = flow.content_height;
+    let y3_before = flow.blocks.get(&3).unwrap().y;
+    let h1 = flow.blocks.get(&1).unwrap().height;
+    let h2 = flow.blocks.get(&2).unwrap().height;
+
+    let removed = flow.remove_leading(2);
+
+    assert!(
+        (removed - (h1 + h2)).abs() < 0.001,
+        "reported removed height {removed} != actual {}",
+        h1 + h2
+    );
+    assert!(!flow.blocks.contains_key(&1) && !flow.blocks.contains_key(&2));
+    assert_eq!(flow.flow_order.len(), 3, "flow_order must lose exactly 2");
+
+    // Survivors keep their absolute y, and the flow keeps its height: content
+    // below an eviction must not jump under the user.
+    assert!(
+        (flow.blocks.get(&3).unwrap().y - y3_before).abs() < 0.001,
+        "survivor moved on eviction"
+    );
+    assert!(
+        (flow.content_height - content_height_before).abs() < 0.001,
+        "content_height changed on eviction"
+    );
+}
+
+/// `hit_test` binary-searches `flow_order` assuming ascending `y`. Dropping a
+/// prefix of an ascending run leaves it ascending — assert it, since a
+/// violation would corrupt hit-testing rather than fail loudly.
+#[test]
+fn remove_leading_preserves_ascending_flow_order() {
+    let ts = make_typesetter();
+    let mut flow = FlowLayout::new();
+    for i in 1..=6 {
+        flow.append_block(ts.font_registry(), &make_block(i, "Line."), 800.0);
+    }
+
+    flow.remove_leading(3);
+
+    let ys: Vec<f32> = flow
+        .flow_order
+        .iter()
+        .map(|item| match item {
+            FlowItem::Block { y, .. } | FlowItem::Table { y, .. } | FlowItem::Frame { y, .. } => *y,
+        })
+        .collect();
+    assert!(
+        ys.windows(2).all(|w| w[0] <= w[1]),
+        "flow_order not ascending by y after eviction: {ys:?}"
+    );
+}
+
+/// Evicting more than the flow holds must clamp, not panic or wrap.
+#[test]
+fn remove_leading_saturates_past_the_end() {
+    let ts = make_typesetter();
+    let mut flow = FlowLayout::new();
+    for i in 1..=3 {
+        flow.append_block(ts.font_registry(), &make_block(i, "Line."), 800.0);
+    }
+
+    flow.remove_leading(99);
+
+    assert!(flow.blocks.is_empty());
+    assert!(flow.flow_order.is_empty());
+    assert_eq!(
+        flow.remove_leading(1),
+        0.0,
+        "evicting an empty flow is a no-op"
     );
 }
 

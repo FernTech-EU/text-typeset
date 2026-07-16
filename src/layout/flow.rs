@@ -357,6 +357,72 @@ impl FlowLayout {
         self.content_height = y;
     }
 
+    /// Append one block to the tail of an *existing* layout, in O(1).
+    ///
+    /// This is [`add_block`](Self::add_block) plus the paint-overlay
+    /// bookkeeping that a bulk layout would otherwise do afterwards.
+    /// [`layout_blocks`](Self::layout_blocks) calls `add_block` in a loop and
+    /// then re-captures every block's base in one pass
+    /// (`refresh_base_blocks`, O(N)); `add_block` on its own therefore leaves
+    /// the appended block absent from `base_blocks`, and a later
+    /// `apply_paint_spans_for` would re-derive it from a missing base.
+    ///
+    /// Reusing the bulk refresh for a tail append would re-clone the whole
+    /// document once per appended line — precisely the O(N)-per-line cost this
+    /// method exists to avoid — so it refreshes just the appended block
+    /// (`refresh_base_and_overlay_block`, the same O(1) call
+    /// [`relayout_block`](Self::relayout_block) already relies on).
+    ///
+    /// `add_block` itself is left untouched: `layout_blocks` depends on its
+    /// current no-base-refresh behaviour to keep the bulk path single-pass.
+    pub fn append_block(
+        &mut self,
+        registry: &FontRegistry,
+        params: &BlockLayoutParams,
+        available_width: f32,
+    ) {
+        self.add_block(registry, params, available_width);
+        self.refresh_base_and_overlay_block(params.block_id);
+    }
+
+    /// Drop the first `n` top-level blocks, returning the height removed.
+    ///
+    /// The eviction half of a bounded streaming buffer (a log viewer's
+    /// scrollback cap). Cost is O(n) map removals plus one `Vec` memmove of
+    /// the surviving `flow_order` entries — no reshaping.
+    ///
+    /// Surviving blocks deliberately **keep their absolute `y`**. The vacated
+    /// band at the top simply becomes empty, and `content_height` is unchanged,
+    /// so nothing below moves and no scroll position shifts under the user.
+    /// Rewriting every survivor's `y` would make eviction O(remaining) and
+    /// would yank the viewport; leaving them is both cheaper and correct.
+    /// `flow_order`'s ascending-`y` ordering — which `hit_test`'s binary search
+    /// relies on — is preserved, since removing a prefix of a sorted run leaves
+    /// it sorted.
+    ///
+    /// Only top-level blocks are considered; a leading table or frame stops the
+    /// eviction (a streaming buffer is a flat run of blocks by construction).
+    /// Returns the total height of the blocks actually removed.
+    pub fn remove_leading(&mut self, n: usize) -> f32 {
+        let mut removed_height = 0.0;
+        let mut removed = 0;
+
+        for item in self.flow_order.iter().take(n) {
+            let FlowItem::Block { block_id, .. } = item else {
+                break;
+            };
+            if let Some(block) = self.blocks.remove(block_id) {
+                removed_height += block.height;
+            }
+            self.base_blocks.remove(block_id);
+            self.pending_paint_spans.remove(block_id);
+            removed += 1;
+        }
+
+        self.flow_order.drain(..removed);
+        removed_height
+    }
+
     /// Lay out a sequence of blocks vertically.
     pub fn layout_blocks(
         &mut self,

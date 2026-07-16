@@ -140,7 +140,10 @@ fn main() {
                     flow.layout_blocks(registry, blocks.clone(), WIDTH);
                     let start = Instant::now();
                     for params in &extra {
-                        flow.add_block(registry, params, WIDTH);
+                        // The real tail-append entry point, base-overlay
+                        // capture included — not the raw `add_block`, whose
+                        // bookkeeping a bulk layout would finish afterwards.
+                        flow.append_block(registry, params, WIDTH);
                     }
                     let elapsed = start.elapsed();
                     std::hint::black_box(flow.content_height);
@@ -162,7 +165,7 @@ fn main() {
 
     println!("{:-<78}", "");
     println!(
-        "full_relayout = FlowLayout::layout_blocks(N)  |  incremental = FlowLayout::add_block(1)"
+        "full_relayout = FlowLayout::layout_blocks(N)  |  incremental = FlowLayout::append_block(1)"
     );
     println!();
 
