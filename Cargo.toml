@@ -55,6 +55,14 @@ text-document = { path = "../text-document/crates/public_api", version = "1.7.0"
 insta = { version = "1.48.0", features = ["yaml"] }
 proptest = "1"
 
+# Deterministic, dependency-free timing harness (plain `fn main()`), so the
+# streaming/virtualization numbers are reproducible and bounded: criterion's
+# iteration auto-scaling either grows the flow under test by millions of
+# blocks or spends its budget on untimed rebuilds.
+[[bench]]
+name = "virtualization"
+harness = false
+
 [profile.release]
 lto = "fat"
 panic = "abort"
