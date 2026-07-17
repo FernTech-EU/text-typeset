@@ -71,7 +71,7 @@ impl LayoutLine {
     /// the run's right edge; for an RTL run the leftmost edge is the
     /// trailing (highest) offset and each glyph's right edge is its own
     /// (leading) offset.
-    fn caret_stops(&self) -> Vec<(usize, f32)> {
+    pub(crate) fn caret_stops(&self) -> Vec<(usize, f32)> {
         let mut stops: Vec<(usize, f32)> = Vec::new();
         for run in &self.runs {
             let glyphs = &run.shaped_run.glyphs;

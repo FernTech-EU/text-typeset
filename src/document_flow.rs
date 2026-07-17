@@ -1734,6 +1734,35 @@ impl DocumentFlow {
         char_start: usize,
         char_end: usize,
     ) -> Vec<CharacterGeometry> {
+        // x for `offset` against a sorted, offset-deduped stop list: exact match,
+        // else the nearer of the two bracketing stops (lower offset wins a tie) —
+        // the same rule `LayoutLine::x_for_offset` applies, but O(log n) against a
+        // shared build instead of an O(n) rebuild-and-scan per character.
+        fn x_in_sorted_stops(stops: &[(usize, f32)], offset: usize) -> f32 {
+            if stops.is_empty() {
+                return 0.0;
+            }
+            match stops.binary_search_by_key(&offset, |(o, _)| *o) {
+                Ok(i) => stops[i].1,
+                Err(i) => {
+                    let left = i.checked_sub(1).map(|j| stops[j]);
+                    let right = stops.get(i).copied();
+                    match (left, right) {
+                        (Some((lo, lx)), Some((ro, rx))) => {
+                            if offset.abs_diff(lo) <= ro.abs_diff(offset) {
+                                lx
+                            } else {
+                                rx
+                            }
+                        }
+                        (Some((_, lx)), None) => lx,
+                        (None, Some((_, rx))) => rx,
+                        (None, None) => 0.0,
+                    }
+                }
+            }
+        }
+
         if char_start >= char_end {
             return Vec::new();
         }
@@ -1749,13 +1778,23 @@ impl DocumentFlow {
             }
             let local_start = char_start.max(line.char_range.start);
             let local_end = char_end.min(line.char_range.end);
+            // Build the line's caret stops ONCE and index into them, rather than
+            // calling `x_for_offset` per character — which rebuilt the stop list
+            // (O(runs+glyphs), one allocation) every call. The paint pass splits
+            // a spell-checked line into a run per range, so `x_for_offset`-per-char
+            // is O(chars × runs) per line and turns quadratic on a dense document
+            // (this dominated the accessibility rebuild on a Lorem scene with tens
+            // of thousands of ranges). Stable-sort by offset then dedup keeps the
+            // first (leftmost) x per offset — the same tie-break `x_for_offset`
+            // makes with its find-first — so the geometry is unchanged.
+            let mut stops = line.caret_stops();
+            stops.sort_by_key(|(o, _)| *o);
+            stops.dedup_by_key(|(o, _)| *o);
             for c in local_start..local_end {
-                let x = line.x_for_offset(c);
-                absolute.push((c, x));
+                absolute.push((c, x_in_sorted_stops(&stops, c)));
             }
             if local_end == char_end {
-                let x_end = line.x_for_offset(local_end);
-                absolute.push((local_end, x_end));
+                absolute.push((local_end, x_in_sorted_stops(&stops, local_end)));
             }
         }
 
