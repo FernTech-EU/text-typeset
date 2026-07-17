@@ -680,6 +680,32 @@ impl DocumentFlow {
         self.flow_layout.set_uniform_extent(total_rows, row_height);
     }
 
+    /// Convert one document block snapshot into layout params using this flow's
+    /// own bridge options — the per-block half of [`layout_full`](Self::layout_full)'s
+    /// conversion, exposed for the windowed streaming path.
+    ///
+    /// [`layout_window`](Self::layout_window) takes already-built
+    /// [`BlockLayoutParams`](crate::layout::block::BlockLayoutParams), but only
+    /// this flow knows the code-block colours, echo char, and
+    /// justified-hyphenation policy that `layout_full` folds in through
+    /// [`BridgeOptions`](crate::bridge::BridgeOptions). A streaming consumer
+    /// building a window of rows from document snapshots calls this per row, so
+    /// the windowed and full paths shape a given block identically. The result
+    /// is a plain value the caller may tint (set a fragment's
+    /// `foreground_color`) before handing the window to `layout_window`.
+    pub fn block_params_for(
+        &self,
+        block: &text_document::BlockSnapshot,
+    ) -> crate::layout::block::BlockLayoutParams {
+        let opts = crate::bridge::BridgeOptions {
+            code_block_background: self.code_block_background,
+            code_block_foreground: self.code_block_foreground,
+            echo_char: self.echo_char,
+            hyphenate_justified: self.hyphenate_justified,
+        };
+        crate::bridge::convert_block_with(block, &opts)
+    }
+
     /// Append a frame to the current flow. The frame's position
     /// (inline, float, absolute) is carried in `params`.
     pub fn add_frame(&mut self, service: &TextFontService, params: &FrameLayoutParams) {
@@ -2387,5 +2413,46 @@ mod tests {
         // Now the incremental path succeeds.
         flow.relayout_block(&svc, &block(1, "Hello world"))
             .expect("relayout_block must succeed after a fresh post-scale layout");
+    }
+
+    /// `block_params_for` converts a document block snapshot into layout params
+    /// — the per-block seam the windowed streaming path is built on. The text
+    /// must round-trip so the shaped row matches the document.
+    #[test]
+    fn block_params_for_converts_a_document_snapshot() {
+        let flow = DocumentFlow::new();
+        let doc = text_document::TextDocument::new();
+        doc.set_plain_text("alpha\nbeta").unwrap();
+
+        // Second block ("beta") starts after "alpha\n" — position 6.
+        let snap = doc.snapshot_block_at_position(6).expect("block snapshot");
+        let params = flow.block_params_for(&snap);
+
+        assert_eq!(params.text, "beta", "the block text must round-trip");
+        assert!(
+            !params.fragments.is_empty(),
+            "a non-empty block must convert to at least one fragment"
+        );
+    }
+
+    /// It must use *this flow's* bridge options, not defaults — otherwise the
+    /// windowed path would shape a block differently from `layout_full`. The
+    /// echo char is the cheapest observable: with it set, the conversion masks
+    /// the text.
+    #[test]
+    fn block_params_for_honours_the_flow_echo_char() {
+        let mut flow = DocumentFlow::new();
+        flow.set_echo_char(Some('•'));
+        let doc = text_document::TextDocument::new();
+        doc.set_plain_text("secret").unwrap();
+
+        let snap = doc.snapshot_block_at_position(0).expect("block snapshot");
+        let params = flow.block_params_for(&snap);
+
+        assert!(
+            params.fragments.iter().all(|f| !f.text.contains("secret")),
+            "the flow's echo char must mask the plaintext, proving its own \
+             bridge options are used"
+        );
     }
 }
