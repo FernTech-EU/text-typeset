@@ -12,6 +12,7 @@ pub fn generate_block_decorations(
     registry: &FontRegistry,
     scroll_offset: f32,
     viewport_height: f32,
+    render_window: Option<(f32, f32)>,
     x_offset: f32,
     y_offset: f32,
     available_width: f32,
@@ -19,6 +20,11 @@ pub fn generate_block_decorations(
     scale_factor: f32,
 ) -> Vec<DecorationRect> {
     let mut decorations = Vec::new();
+
+    // Cull to the explicit render window when set, else the viewport-derived one.
+    // Positioning below still keys off `scroll_offset`, so windowing shifts nothing.
+    let (cull_top, cull_bottom) =
+        crate::render::frame::cull_bounds(render_window, scroll_offset, viewport_height);
 
     // Block background color
     if let Some(bg_color) = block.background_color {
@@ -33,12 +39,12 @@ pub fn generate_block_decorations(
 
     for line in &block.lines {
         let line_y = y_offset + block.y + line.y; // baseline in document space
-        let screen_top = line_y - line.ascent - scroll_offset;
-        // Line-level viewport culling
-        if screen_top + line.line_height < 0.0 {
+        // Line-level culling in content space, against the render window.
+        let content_top = line_y - line.ascent;
+        if content_top + line.line_height < cull_top {
             continue;
         }
-        if screen_top > viewport_height {
+        if content_top > cull_bottom {
             break;
         }
         let screen_baseline = line_y - scroll_offset;

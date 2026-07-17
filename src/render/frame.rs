@@ -20,6 +20,21 @@ use crate::types::{CursorDisplay, GlyphQuad, ImageQuad, RenderFrame};
 /// `screen` rects stay in logical pixels — layout is identical at every
 /// raster scale. Scaled rasters are unhinted.
 #[allow(clippy::too_many_arguments)]
+/// The content-space cull band `[top, bottom]` a render should keep: the explicit
+/// `render_window` when set (an editor windowing to an outer clip), else the
+/// viewport-derived `[scroll_offset, scroll_offset + viewport_height]`. Positioning
+/// is never derived from this — only culling.
+pub(crate) fn cull_bounds(
+    render_window: Option<(f32, f32)>,
+    scroll_offset: f32,
+    viewport_height: f32,
+) -> (f32, f32) {
+    match render_window {
+        Some((top, height)) => (top, top + height),
+        None => (scroll_offset, scroll_offset + viewport_height),
+    }
+}
+
 pub fn build_render_frame(
     flow: &FlowLayout,
     registry: &FontRegistry,
@@ -29,6 +44,7 @@ pub fn build_render_frame(
     scroll_offset: f32,
     viewport_width: f32,
     viewport_height: f32,
+    render_window: Option<(f32, f32)>,
     cursors: &[CursorDisplay],
     cursor_color: [f32; 4],
     selection_color: [f32; 4],
@@ -65,8 +81,11 @@ pub fn build_render_frame(
         atlas.debug_poison_rect(glyph.atlas_x, glyph.atlas_y, glyph.width, glyph.height);
     }
 
-    let view_top = scroll_offset;
-    let view_bottom = scroll_offset + viewport_height;
+    // Cull to the explicit render window when set (an editor laid out at full
+    // document height inside an outer ScrollArea supplies its true visible band
+    // here); otherwise to the viewport-derived window. Positioning below still
+    // keys off `scroll_offset`, so only culling is affected.
+    let (view_top, view_bottom) = cull_bounds(render_window, scroll_offset, viewport_height);
 
     for item in &flow.flow_order {
         let (block_id, item_y, item_height) = match item {
@@ -178,6 +197,7 @@ pub fn build_render_frame(
                 scale_context,
                 scroll_offset,
                 viewport_height,
+                render_window,
                 text_color,
                 scale_factor,
                 raster_scale,
@@ -197,6 +217,7 @@ pub fn build_render_frame(
                 registry,
                 scroll_offset,
                 viewport_height,
+                render_window,
                 0.0,
                 0.0,
                 viewport_width,
@@ -254,6 +275,7 @@ pub(crate) fn render_block_at_offset(
     scale_context: &mut swash::scale::ScaleContext,
     scroll_offset: f32,
     viewport_height: f32,
+    render_window: Option<(f32, f32)>,
     default_text_color: [f32; 4],
     scale_factor: f32,
     raster_scale: f32,
@@ -261,13 +283,19 @@ pub(crate) fn render_block_at_offset(
     glyph_keys: &mut Vec<GlyphCacheKey>,
     eviction_epoch: &mut u64,
 ) {
+    // Cull to the explicit render window when set, else the viewport-derived one.
+    // Content-space: a line at content y `p` (top) is visible iff it overlaps
+    // `[cull_top, cull_bottom]`. Positioning (`render_run_glyphs`, image y) still
+    // uses `scroll_offset`, so a windowed cull never shifts the glyphs.
+    let (cull_top, cull_bottom) = cull_bounds(render_window, scroll_offset, viewport_height);
+
     // Render list marker on the first line (if present)
     if let Some(marker) = &block.list_marker
         && let Some(first_line) = block.lines.first()
     {
         let baseline_y = offset_y + block.y + first_line.y;
-        let screen_top = baseline_y - first_line.ascent - scroll_offset;
-        if screen_top + first_line.line_height >= 0.0 && screen_top <= viewport_height {
+        let content_top = baseline_y - first_line.ascent;
+        if content_top + first_line.line_height >= cull_top && content_top <= cull_bottom {
             render_run_glyphs(
                 &marker.run,
                 offset_x + marker.x,
@@ -289,13 +317,13 @@ pub(crate) fn render_block_at_offset(
 
     for line in &block.lines {
         let line_y = offset_y + block.y + line.y;
-        // Line-level viewport culling
-        let screen_top = line_y - line.ascent - scroll_offset;
-        if screen_top + line.line_height < 0.0 {
-            continue; // above viewport
+        // Line-level viewport culling (content space, against the render window).
+        let content_top = line_y - line.ascent;
+        if content_top + line.line_height < cull_top {
+            continue; // above the window
         }
-        if screen_top > viewport_height {
-            break; // below viewport, and lines are ordered top-to-bottom
+        if content_top > cull_bottom {
+            break; // below the window, and lines are ordered top-to-bottom
         }
 
         for positioned_run in &line.runs {
@@ -383,6 +411,7 @@ fn render_table_cells(
                 scale_context,
                 scroll_offset,
                 viewport_height,
+                None,
                 default_text_color,
                 scale_factor,
                 raster_scale,
@@ -400,6 +429,7 @@ fn render_table_cells(
                 registry,
                 scroll_offset,
                 viewport_height,
+                None,
                 cell_x,
                 cell_y,
                 cell_w,
@@ -442,6 +472,7 @@ fn render_frame_layout(
             scale_context,
             scroll_offset,
             viewport_height,
+            None,
             default_text_color,
             scale_factor,
             raster_scale,
@@ -454,6 +485,7 @@ fn render_frame_layout(
             registry,
             scroll_offset,
             viewport_height,
+            None,
             offset_x,
             offset_y,
             frame.content_width,
@@ -648,6 +680,7 @@ fn render_nested_frame(
             scale_context,
             scroll_offset,
             viewport_height,
+            None,
             default_text_color,
             scale_factor,
             raster_scale,
@@ -660,6 +693,7 @@ fn render_nested_frame(
             registry,
             scroll_offset,
             viewport_height,
+            None,
             content_x,
             content_y,
             nested.content_width,

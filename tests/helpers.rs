@@ -354,6 +354,9 @@ impl Typesetter {
     pub fn set_scroll_offset(&mut self, offset: f32) {
         self.flow.set_scroll_offset(offset);
     }
+    pub fn set_render_window(&mut self, window: Option<(f32, f32)>) {
+        self.flow.set_render_window(window);
+    }
     pub fn content_height(&self) -> f32 {
         self.flow.content_height()
     }

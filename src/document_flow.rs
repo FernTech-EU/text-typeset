@@ -125,11 +125,30 @@ pub enum ContentWidthMode {
 /// lifecycle examples. Every layout/render method here takes a
 /// [`TextFontService`] reference so flows can share one atlas across
 /// an entire window.
+/// Whether the render window changed enough since the last full render that the
+/// incremental paths — which reuse the culled cache — must fall back to a full
+/// re-render. A `None`↔`Some` transition always drifts; two `Some`s drift on a
+/// >0.001px change in either endpoint (so a scroll re-renders, a still view does not).
+fn render_window_drifted(now: Option<(f32, f32)>, then: Option<(f32, f32)>) -> bool {
+    match (now, then) {
+        (None, None) => false,
+        (Some((t0, h0)), Some((t1, h1))) => (t0 - t1).abs() > 0.001 || (h0 - h1).abs() > 0.001,
+        _ => true,
+    }
+}
+
 pub struct DocumentFlow {
     flow_layout: FlowLayout,
     render_frame: RenderFrame,
     scroll_offset: f32,
     rendered_scroll_offset: f32,
+    /// When `Some((top, height))`, render culling uses this content-space band
+    /// instead of `[scroll_offset, scroll_offset + viewport_height]`. Positioning
+    /// (glyph screen y, hit-testing) is unaffected. See [`set_render_window`].
+    render_window: Option<(f32, f32)>,
+    /// The `render_window` in effect at the last full `render()`, so the
+    /// incremental paths can fall back when the visible band scrolls.
+    rendered_window: Option<(f32, f32)>,
     viewport_width: f32,
     viewport_height: f32,
     content_width_mode: ContentWidthMode,
@@ -204,6 +223,8 @@ impl DocumentFlow {
             render_frame: RenderFrame::new(),
             scroll_offset: 0.0,
             rendered_scroll_offset: f32::NAN,
+            render_window: None,
+            rendered_window: None,
             viewport_width: 0.0,
             viewport_height: 0.0,
             content_width_mode: ContentWidthMode::Auto,
@@ -303,6 +324,26 @@ impl DocumentFlow {
     /// Current vertical scroll offset.
     pub fn scroll_offset(&self) -> f32 {
         self.scroll_offset
+    }
+
+    /// Restrict render **culling** to the content-space band `[top, top + height]`
+    /// instead of the default `[scroll_offset, scroll_offset + viewport_height]`.
+    ///
+    /// This affects *only* which blocks / lines / decorations are emitted into the
+    /// frame — glyph screen positions, hit-testing and caret geometry all still key
+    /// off `scroll_offset` and are unchanged. It exists for an editor laid out at its
+    /// full document height inside an outer `ScrollArea` ("bastard mode"): its own
+    /// viewport spans the whole document (so the viewport-derived window culls
+    /// nothing) and `scroll_offset` stays `0` (the ancestor scrolls it by
+    /// translation), so the true visible band must be supplied from the ancestor
+    /// clip. Pass `None` (the default) to restore the viewport-derived window.
+    pub fn set_render_window(&mut self, window: Option<(f32, f32)>) {
+        self.render_window = window;
+    }
+
+    /// The active render window, if any. See [`set_render_window`](Self::set_render_window).
+    pub fn render_window(&self) -> Option<(f32, f32)> {
+        self.render_window
     }
 
     /// Total content height after layout, in logical pixels.
@@ -756,6 +797,7 @@ impl DocumentFlow {
             self.scroll_offset,
             effective_vw,
             effective_vh,
+            self.render_window,
             &self.cursors,
             self.cursor_color,
             self.selection_color,
@@ -765,6 +807,7 @@ impl DocumentFlow {
             &mut service.eviction_epoch,
         );
         self.rendered_scroll_offset = self.scroll_offset;
+        self.rendered_window = self.render_window;
         self.rendered_zoom = self.zoom;
         self.rendered_raster_scale = self.raster_scale;
         apply_zoom(&mut self.render_frame, self.zoom);
@@ -789,6 +832,7 @@ impl DocumentFlow {
         block_id: usize,
     ) -> &RenderFrame {
         if (self.scroll_offset - self.rendered_scroll_offset).abs() > 0.001
+            || render_window_drifted(self.render_window, self.rendered_window)
             || (self.zoom - self.rendered_zoom).abs() > 0.001
             || (self.raster_scale - self.rendered_raster_scale).abs() > 0.001
         {
@@ -854,6 +898,7 @@ impl DocumentFlow {
                 &mut service.scale_context,
                 self.scroll_offset,
                 effective_vh,
+                self.render_window,
                 self.text_color,
                 scale_factor,
                 self.raster_scale,
@@ -871,6 +916,7 @@ impl DocumentFlow {
                 &service.font_registry,
                 self.scroll_offset,
                 effective_vh,
+                self.render_window,
                 0.0,
                 0.0,
                 effective_vw,
@@ -928,6 +974,7 @@ impl DocumentFlow {
     /// if the scroll offset or zoom changed in the meantime.
     pub fn render_cursor_only(&mut self, service: &mut TextFontService) -> &RenderFrame {
         if (self.scroll_offset - self.rendered_scroll_offset).abs() > 0.001
+            || render_window_drifted(self.render_window, self.rendered_window)
             || (self.zoom - self.rendered_zoom).abs() > 0.001
         {
             return self.render(service);
