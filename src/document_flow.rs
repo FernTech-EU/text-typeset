@@ -144,7 +144,8 @@ pub struct DocumentFlow {
     rendered_scroll_offset: f32,
     /// When `Some((top, height))`, render culling uses this content-space band
     /// instead of `[scroll_offset, scroll_offset + viewport_height]`. Positioning
-    /// (glyph screen y, hit-testing) is unaffected. See [`set_render_window`].
+    /// (glyph screen y, hit-testing) is unaffected. See
+    /// [`DocumentFlow::set_render_window`].
     render_window: Option<(f32, f32)>,
     /// The `render_window` in effect at the last full `render()`, so the
     /// incremental paths can fall back when the visible band scrolls.
@@ -685,7 +686,7 @@ impl DocumentFlow {
     /// conversion, exposed for the windowed streaming path.
     ///
     /// [`layout_window`](Self::layout_window) takes already-built
-    /// [`BlockLayoutParams`](crate::layout::block::BlockLayoutParams), but only
+    /// [`BlockLayoutParams`], but only
     /// this flow knows the code-block colours, echo char, and
     /// justified-hyphenation policy that `layout_full` folds in through
     /// [`BridgeOptions`](crate::bridge::BridgeOptions). A streaming consumer

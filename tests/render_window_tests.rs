@@ -13,7 +13,9 @@ use helpers::{make_block, make_typesetter};
 /// A tall document: 40 one-line blocks. Returns (typesetter, line_height).
 fn tall_doc() -> (helpers::Typesetter, f32) {
     let mut ts = make_typesetter();
-    let blocks: Vec<_> = (1..=40).map(|i| make_block(i, "The quick brown fox")).collect();
+    let blocks: Vec<_> = (1..=40)
+        .map(|i| make_block(i, "The quick brown fox"))
+        .collect();
     ts.layout_blocks(blocks);
     let line_h = ts.content_height() / 40.0;
     // A viewport tall enough to hold the whole document (bastard mode).

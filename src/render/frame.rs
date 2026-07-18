@@ -9,17 +9,6 @@ use crate::render::cursor::generate_cursor_decorations;
 use crate::render::decoration::generate_block_decorations;
 use crate::types::{CursorDisplay, GlyphQuad, ImageQuad, RenderFrame};
 
-/// Build a RenderFrame from the current flow layout.
-///
-/// Iterates visible blocks (viewport culling), rasterizes uncached glyphs
-/// into the atlas, and produces GlyphQuad entries for each visible glyph.
-///
-/// `raster_scale` densifies glyph bitmaps for content drawn under a scale
-/// transform (`1.0` for unscaled UI): rasterization happens at
-/// `size × scale_factor × raster_scale` physical pixels while glyph
-/// `screen` rects stay in logical pixels — layout is identical at every
-/// raster scale. Scaled rasters are unhinted.
-#[allow(clippy::too_many_arguments)]
 /// The content-space cull band `[top, bottom]` a render should keep: the explicit
 /// `render_window` when set (an editor windowing to an outer clip), else the
 /// viewport-derived `[scroll_offset, scroll_offset + viewport_height]`. Positioning
@@ -35,6 +24,17 @@ pub(crate) fn cull_bounds(
     }
 }
 
+/// Build a RenderFrame from the current flow layout.
+///
+/// Iterates visible blocks (viewport culling), rasterizes uncached glyphs
+/// into the atlas, and produces GlyphQuad entries for each visible glyph.
+///
+/// `raster_scale` densifies glyph bitmaps for content drawn under a scale
+/// transform (`1.0` for unscaled UI): rasterization happens at
+/// `size × scale_factor × raster_scale` physical pixels while glyph
+/// `screen` rects stay in logical pixels — layout is identical at every
+/// raster scale. Scaled rasters are unhinted.
+#[allow(clippy::too_many_arguments)]
 pub fn build_render_frame(
     flow: &FlowLayout,
     registry: &FontRegistry,
