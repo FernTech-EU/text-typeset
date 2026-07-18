@@ -33,8 +33,8 @@ hyphenation-western-european = [
 hyphenation-all-languages = ["hypher/default"]
 
 [dependencies]
-harfrust = "0.11.0"
-swash = "0.2.9"
+harfrust = "0.12.0"
+swash = "0.2.10"
 fontdb = "0.23.0"
 # OS/2 unicode-range + cmap reader for font writing-system (script)
 # classification. Resolves to the exact version already pulled in
