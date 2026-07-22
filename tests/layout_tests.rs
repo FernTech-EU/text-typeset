@@ -209,7 +209,7 @@ fn first_line_indent_reduces_available_space() {
         0.0,
         &metrics,
         None,
-        RunOrder::AlreadyVisual
+        RunOrder::AlreadyVisual,
     );
 
     let run2 = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
@@ -221,7 +221,7 @@ fn first_line_indent_reduces_available_space() {
         50.0,
         &metrics,
         None,
-        RunOrder::AlreadyVisual
+        RunOrder::AlreadyVisual,
     );
 
     assert!(
@@ -551,7 +551,7 @@ fn text_indent_shifts_first_line() {
         40.0,
         &metrics,
         None,
-        RunOrder::AlreadyVisual
+        RunOrder::AlreadyVisual,
     );
 
     // First line should have its first run starting at x >= 40 (the indent)
@@ -608,7 +608,7 @@ fn multi_fragment_all_glyphs_accounted() {
         0.0,
         &metrics,
         None,
-        RunOrder::AlreadyVisual
+        RunOrder::AlreadyVisual,
     );
 
     let in_lines: usize = lines
@@ -652,7 +652,7 @@ fn multi_fragment_wrapping_breaks_at_correct_boundary() {
         0.0,
         &metrics,
         None,
-        RunOrder::AlreadyVisual
+        RunOrder::AlreadyVisual,
     );
 
     assert!(

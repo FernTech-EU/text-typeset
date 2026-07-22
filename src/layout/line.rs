@@ -27,7 +27,10 @@ pub(crate) struct CaretStop {
 /// before the offset (the trailing stop) and `Upstream` to the text
 /// after it (the leading stop). Falls back to the first candidate if the
 /// expected side is absent, so a malformed line still yields a caret.
-fn pick_by_affinity<'a>(stops: &[&'a CaretStop], affinity: CursorAffinity) -> Option<&'a CaretStop> {
+fn pick_by_affinity<'a>(
+    stops: &[&'a CaretStop],
+    affinity: CursorAffinity,
+) -> Option<&'a CaretStop> {
     if stops.len() < 2 {
         return stops.first().copied();
     }

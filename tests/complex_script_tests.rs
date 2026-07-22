@@ -245,7 +245,8 @@ fn arabic_joins_when_it_arrives_through_glyph_fallback() {
         "fallback should have resolved every glyph; got {via_fallback:?}"
     );
     assert_eq!(
-        via_fallback, direct,
+        via_fallback,
+        direct,
         "Arabic reached through glyph fallback must shape the same as Arabic \
          shaped natively — {} glyphs vs {}; per-character fallback yields the \
          isolated bases with the dots stripped",

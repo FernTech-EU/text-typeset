@@ -300,17 +300,11 @@ fn selection_rects_for_block(
             let anchor = if line_x.is_finite() { line_x } else { 0.0 };
 
             if rtl {
-                let leftmost = spans
-                    .iter()
-                    .map(|s| s.0)
-                    .fold(anchor, f32::min);
+                let leftmost = spans.iter().map(|s| s.0).fold(anchor, f32::min);
                 let to = (0.0f32 - origin).min(leftmost);
                 spans.push((to, leftmost.max(to)));
             } else {
-                let rightmost = spans
-                    .iter()
-                    .map(|s| s.1)
-                    .fold(anchor, f32::max);
+                let rightmost = spans.iter().map(|s| s.1).fold(anchor, f32::max);
                 let to = (viewport_width - origin).max(rightmost);
                 spans.push((rightmost.min(to), to));
             }

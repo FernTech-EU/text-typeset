@@ -263,19 +263,11 @@ fn reorder_line_visually(line: &mut LayoutLine) {
     // every line of an ordinary Latin document. Building the level and
     // permutation vectors first would allocate twice per line on every
     // relayout just to conclude the same thing.
-    if line
-        .runs
-        .iter()
-        .all(|r| r.shaped_run.bidi_level % 2 == 0)
-    {
+    if line.runs.iter().all(|r| r.shaped_run.bidi_level % 2 == 0) {
         return;
     }
 
-    let levels: Vec<u8> = line
-        .runs
-        .iter()
-        .map(|r| r.shaped_run.bidi_level)
-        .collect();
+    let levels: Vec<u8> = line.runs.iter().map(|r| r.shaped_run.bidi_level).collect();
 
     let order = crate::shaping::shaper::visual_order(&levels);
     if order.iter().copied().eq(0..order.len()) {

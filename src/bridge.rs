@@ -11,8 +11,8 @@ use text_document::{
 use crate::layout::block::{BlockLayoutParams, FragmentParams, PaintSpan};
 use crate::layout::frame::{FrameLayoutParams, FramePosition};
 use crate::layout::paragraph::Alignment;
-use crate::shaping::shaper::TextDirection;
 use crate::layout::table::{CellLayoutParams, TableLayoutParams};
+use crate::shaping::shaper::TextDirection;
 
 const DEFAULT_LIST_INDENT: f32 = 24.0;
 const INDENT_PER_LEVEL: f32 = 24.0;

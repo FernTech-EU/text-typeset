@@ -46,7 +46,12 @@ fn logical_starts_in_visual_order(line: &LayoutLine) -> Vec<usize> {
         .runs
         .iter()
         .filter_map(|r| {
-            let min = r.shaped_run.glyphs.iter().map(|g| g.cluster as usize).min()?;
+            let min = r
+                .shaped_run
+                .glyphs
+                .iter()
+                .map(|g| g.cluster as usize)
+                .min()?;
             Some((r.x, min))
         })
         .collect();
@@ -54,9 +59,16 @@ fn logical_starts_in_visual_order(line: &LayoutLine) -> Vec<usize> {
     runs.into_iter().map(|(_, c)| c).collect()
 }
 
-fn single_line(ts: &Typesetter, params: &text_typeset::layout::block::BlockLayoutParams) -> LayoutLine {
+fn single_line(
+    ts: &Typesetter,
+    params: &text_typeset::layout::block::BlockLayoutParams,
+) -> LayoutLine {
     let layout = layout_block(ts.font_registry(), params, 600.0, 1.0, 1.0);
-    assert_eq!(layout.lines.len(), 1, "test expects the text to fit one line");
+    assert_eq!(
+        layout.lines.len(),
+        1,
+        "test expects the text to fit one line"
+    );
     layout.lines.into_iter().next().unwrap()
 }
 
@@ -102,7 +114,10 @@ fn an_rtl_paragraph_paints_its_first_word_rightmost() {
 
     // The Latin island keeps its own left-to-right order in the middle:
     // its run must sit between the two Arabic runs, not at either end.
-    let hello_start = text.find("hello").map(|b| text[..b].chars().count()).unwrap();
+    let hello_start = text
+        .find("hello")
+        .map(|b| text[..b].chars().count())
+        .unwrap();
     let hello_pos = starts.iter().position(|&s| s == hello_start);
     assert!(
         matches!(hello_pos, Some(p) if p > 0 && p < starts.len() - 1),
@@ -475,8 +490,11 @@ fn a_partly_selected_cluster_still_paints() {
 // ── Stage 7: the caret at a direction seam ─────────────────────
 
 /// Caret x at `offset` under each affinity, for a one-line block.
-fn caret_x_both_ways(ts: &Typesetter, params: &text_typeset::layout::block::BlockLayoutParams,
-                     offset: usize) -> (f32, f32) {
+fn caret_x_both_ways(
+    ts: &Typesetter,
+    params: &text_typeset::layout::block::BlockLayoutParams,
+    offset: usize,
+) -> (f32, f32) {
     let line = single_line(ts, params);
     (
         line.x_for_offset_with_affinity(offset, text_typeset::CursorAffinity::Downstream),

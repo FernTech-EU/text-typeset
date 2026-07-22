@@ -318,7 +318,11 @@ pub fn shape_text_directed(
         advance_width: total_advance,
         text_range: text_offset..text_offset + text.len(),
         direction: resolved_direction,
-        bidi_level: if resolved_direction == TextDirection::RightToLeft { 1 } else { 0 },
+        bidi_level: if resolved_direction == TextDirection::RightToLeft {
+            1
+        } else {
+            0
+        },
         underline_style: crate::types::UnderlineStyle::None,
         overline: false,
         strikeout: false,
@@ -404,7 +408,11 @@ pub fn shape_text_with_buffer(
         advance_width: total_advance,
         text_range: text_offset..text_offset + text.len(),
         direction: resolved_direction,
-        bidi_level: if resolved_direction == TextDirection::RightToLeft { 1 } else { 0 },
+        bidi_level: if resolved_direction == TextDirection::RightToLeft {
+            1
+        } else {
+            0
+        },
         underline_style: crate::types::UnderlineStyle::None,
         overline: false,
         strikeout: false,
@@ -731,9 +739,7 @@ mod bidi_tests {
         let auto = analyze_paragraph(text, TextDirection::Auto);
         let first_visual = |p: &BidiParagraph| {
             let levels: Vec<u8> = p.runs.iter().map(|r| r.level).collect();
-            visual_order(&levels)
-                .first()
-                .map(|&i| p.runs[i].direction)
+            visual_order(&levels).first().map(|&i| p.runs[i].direction)
         };
         assert_eq!(first_visual(&auto), Some(TextDirection::LeftToRight));
         assert_eq!(first_visual(&forced), Some(TextDirection::RightToLeft));
