@@ -32,6 +32,14 @@ pub struct ShapedRun {
     /// offsets descend across the array. Hit-testing and caret placement
     /// need this to map between visual x and logical offset correctly.
     pub direction: TextDirection,
+    /// UAX #9 embedding level (even LTR, odd RTL), used by rule L2 to put
+    /// the runs of a line into visual order.
+    ///
+    /// `direction` cannot stand in for this: it collapses level 0 and
+    /// level 2, so a Latin phrase nested inside Arabic would reorder as
+    /// though it sat at paragraph level. Runs shaped outside a bidi
+    /// analysis keep level 0, which reorders as plain LTR.
+    pub bidi_level: u8,
     /// Decoration flags from the source fragment's TextFormat.
     pub underline_style: crate::types::UnderlineStyle,
     pub overline: bool,

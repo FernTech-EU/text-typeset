@@ -1,6 +1,8 @@
 use crate::layout::block::BlockLayout;
 use crate::layout::flow::{FlowItem, FlowLayout};
+use crate::layout::line::LayoutLine;
 use crate::render::hit_test::caret_rect;
+use crate::shaping::shaper::TextDirection;
 use crate::types::{CursorDisplay, DecorationKind, DecorationRect};
 
 /// Generate cursor and selection decoration rects from the current cursor state.
@@ -262,6 +264,7 @@ fn selection_rects_for_block(
     rects: &mut Vec<DecorationRect>,
 ) {
     let block_start = block.position;
+    let rtl = block.base_direction == TextDirection::RightToLeft;
 
     for line in &block.lines {
         let line_abs_start = block_start + line.char_range.start;
@@ -277,27 +280,125 @@ fn selection_rects_for_block(
         let offset_start = sel_line_start - block_start;
         let offset_end = sel_line_end - block_start;
 
-        let x_start = offset_x + line.x_for_offset(offset_start) + block.left_margin;
-        let x_end_text = offset_x + line.x_for_offset(offset_end) + block.left_margin;
-
         let line_top = offset_y + block.y + line.y - line.ascent - scroll_offset;
         let line_height = line.line_height;
+        let origin = offset_x + block.left_margin;
 
-        let selection_continues_past_line = end > line_abs_end;
-        let x_end = if selection_continues_past_line && viewport_width > 0.0 {
-            viewport_width
-        } else {
-            x_end_text
-        };
+        let mut spans = selection_spans_on_line(line, offset_start, offset_end);
 
-        if x_end > x_start {
+        // A selection that runs past this line covers the line break too,
+        // so the highlight is drawn out to the edge of the viewport. That
+        // edge is the *trailing* one: the right in an LTR paragraph, the
+        // left in an RTL one, where the text continues off to the left.
+        if end > line_abs_end && viewport_width > 0.0 {
+            // An empty line — a blank paragraph between two prose
+            // paragraphs — contributes no spans at all, so the folds
+            // below would start from ±infinity and produce a rect of
+            // infinite width. Anchor the extension at the line's own
+            // start instead.
+            let line_x = line.runs.iter().map(|r| r.x).fold(f32::INFINITY, f32::min);
+            let anchor = if line_x.is_finite() { line_x } else { 0.0 };
+
+            if rtl {
+                let leftmost = spans
+                    .iter()
+                    .map(|s| s.0)
+                    .fold(anchor, f32::min);
+                let to = (0.0f32 - origin).min(leftmost);
+                spans.push((to, leftmost.max(to)));
+            } else {
+                let rightmost = spans
+                    .iter()
+                    .map(|s| s.1)
+                    .fold(anchor, f32::max);
+                let to = (viewport_width - origin).max(rightmost);
+                spans.push((rightmost.min(to), to));
+            }
+        }
+
+        for (left, right) in merge_spans(spans) {
+            let width = right - left;
+            if width <= 0.0 {
+                continue;
+            }
             rects.push(DecorationRect {
-                rect: [x_start, line_top, x_end - x_start, line_height],
+                rect: [origin + left, line_top, width, line_height],
                 color,
                 kind: DecorationKind::Selection,
             });
         }
     }
+}
+
+/// The visual x-spans that a logical char range occupies on one line.
+///
+/// Unions the extent of every glyph whose cluster falls inside the range,
+/// which works out the same for either direction — an RTL run's glyphs
+/// still advance left to right on screen, they just carry descending
+/// clusters.
+///
+/// This replaces taking the x of the range's two endpoints and
+/// subtracting. That worked only for left-to-right text: on an RTL run
+/// the lower logical offset sits at the *right* edge, so the subtraction
+/// came out negative and the caller's `if x_end > x_start` guard dropped
+/// the rect — an RTL selection painted no highlight at all while cut,
+/// copy and delete still operated on the correct range underneath.
+///
+/// Returns one raw extent per covered glyph, unmerged: every caller
+/// appends the viewport-edge span before painting and has to coalesce
+/// anyway, so merging here would sort the same list twice.
+///
+/// Several disjoint spans survive that merge when the range crosses a
+/// direction boundary — a contiguous logical selection is genuinely
+/// discontiguous on screen once the runs have been reordered, and each
+/// piece needs its own rect.
+fn selection_spans_on_line(line: &LayoutLine, start: usize, end: usize) -> Vec<(f32, f32)> {
+    if end <= start {
+        return Vec::new();
+    }
+
+    let mut spans: Vec<(f32, f32)> = Vec::new();
+    for run in &line.runs {
+        let mut x = run.x;
+        for glyph in &run.shaped_run.glyphs {
+            let advance = glyph.x_advance;
+            let cluster = glyph.cluster as usize;
+            // A glyph can span several characters — a Devanagari
+            // conjunct, an Arabic ligature — so test whether its whole
+            // cluster *intersects* the selection. Asking only whether
+            // the cluster starts inside it drops any glyph the
+            // selection cuts into, which is how a partly-selected
+            // ligature ended up with no highlight at all.
+            let cluster_end = line.cluster_end(cluster).max(cluster + 1);
+            if cluster < end && cluster_end > start {
+                spans.push((x, x + advance));
+            }
+            x += advance;
+        }
+    }
+    // The caller re-merges after appending the viewport-edge span, so
+    // returning raw extents here would only be sorted twice.
+    spans
+}
+
+/// Coalesce touching or overlapping x-spans so adjacent glyphs of one
+/// selection become a single rect rather than one rect per glyph.
+fn merge_spans(mut spans: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    if spans.len() < 2 {
+        return spans;
+    }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut merged: Vec<(f32, f32)> = Vec::with_capacity(spans.len());
+    for (left, right) in spans {
+        match merged.last_mut() {
+            // Half a pixel of slack: consecutive glyph extents are
+            // computed by repeated addition and can land a hair apart.
+            Some(last) if left <= last.1 + 0.5 => last.1 = last.1.max(right),
+            _ => merged.push((left, right)),
+        }
+    }
+    merged
 }
 
 /// Emit cell-level selection rectangles for each `(table_id, row, col)`.

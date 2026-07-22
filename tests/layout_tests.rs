@@ -7,7 +7,7 @@ use text_typeset::font::resolve::resolve_font;
 use text_typeset::layout::block::{PaintSpan, layout_block};
 use text_typeset::layout::flow::{FlowItem, FlowLayout};
 use text_typeset::layout::frame::{FrameBorderStyle, FrameLayoutParams, FramePosition};
-use text_typeset::layout::paragraph::{Alignment, break_into_lines};
+use text_typeset::layout::paragraph::{Alignment, RunOrder, break_into_lines};
 use text_typeset::layout::table::{CellLayoutParams, TableLayoutParams};
 use text_typeset::shaping::shaper::{font_metrics_px, shape_text};
 
@@ -22,7 +22,16 @@ fn layout_text(
         resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let run = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
-    break_into_lines(vec![run], text, width, alignment, 0.0, &metrics, None)
+    break_into_lines(
+        vec![run],
+        text,
+        width,
+        alignment,
+        0.0,
+        &metrics,
+        None,
+        RunOrder::AlreadyVisual,
+    )
 }
 
 #[test]
@@ -200,6 +209,7 @@ fn first_line_indent_reduces_available_space() {
         0.0,
         &metrics,
         None,
+        RunOrder::AlreadyVisual
     );
 
     let run2 = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
@@ -211,6 +221,7 @@ fn first_line_indent_reduces_available_space() {
         50.0,
         &metrics,
         None,
+        RunOrder::AlreadyVisual
     );
 
     assert!(
@@ -243,7 +254,16 @@ fn all_glyphs_accounted_for_after_wrapping() {
     let total_glyphs: usize = run.glyphs.len();
     let metrics = font_metrics_px(ts.font_registry(), &resolved).unwrap();
 
-    let lines = break_into_lines(vec![run], text, 150.0, Alignment::Left, 0.0, &metrics, None);
+    let lines = break_into_lines(
+        vec![run],
+        text,
+        150.0,
+        Alignment::Left,
+        0.0,
+        &metrics,
+        None,
+        RunOrder::AlreadyVisual,
+    );
 
     let glyphs_in_lines: usize = lines
         .iter()
@@ -531,6 +551,7 @@ fn text_indent_shifts_first_line() {
         40.0,
         &metrics,
         None,
+        RunOrder::AlreadyVisual
     );
 
     // First line should have its first run starting at x >= 40 (the indent)
@@ -587,6 +608,7 @@ fn multi_fragment_all_glyphs_accounted() {
         0.0,
         &metrics,
         None,
+        RunOrder::AlreadyVisual
     );
 
     let in_lines: usize = lines
@@ -630,6 +652,7 @@ fn multi_fragment_wrapping_breaks_at_correct_boundary() {
         0.0,
         &metrics,
         None,
+        RunOrder::AlreadyVisual
     );
 
     assert!(

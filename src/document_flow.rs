@@ -48,11 +48,12 @@ use crate::layout::block::BlockLayoutParams;
 use crate::layout::flow::{FlowItem, FlowLayout};
 use crate::layout::frame::FrameLayoutParams;
 use crate::layout::inline_markup::{InlineAttrs, InlineMarkup};
-use crate::layout::paragraph::{Alignment, Hyphenator, break_into_lines};
+use crate::layout::paragraph::{Alignment, Hyphenator, RunOrder, break_into_lines};
 use crate::layout::table::TableLayoutParams;
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
 use crate::shaping::shaper::{
-    bidi_runs, font_metrics_px, shape_text, shape_text_with_fallback, to_harfrust_features,
+    TextDirection, bidi_runs, font_metrics_px, shape_text, shape_text_with_fallback,
+    to_harfrust_features,
 };
 use crate::types::{
     BlockVisualInfo, CharacterGeometry, CursorDisplay, DecorationKind, DecorationRect, GlyphQuad,
@@ -1393,6 +1394,9 @@ impl DocumentFlow {
             0.0,
             &metrics,
             hyphenator,
+            // This path ran the bidi algorithm itself and shaped in
+            // display order, so the runs must not be reordered again.
+            RunOrder::AlreadyVisual,
         );
 
         let line_count = match max_lines {
@@ -1709,6 +1713,9 @@ impl DocumentFlow {
             0.0,
             &metrics,
             hyphenator,
+            // This path ran the bidi algorithm itself and shaped in
+            // display order, so the runs must not be reordered again.
+            RunOrder::AlreadyVisual,
         );
 
         let line_count = match max_lines {
@@ -2045,6 +2052,181 @@ impl DocumentFlow {
         })
     }
 
+    /// The reading direction of the text *at* `position`.
+    ///
+    /// This is the direction of the bidi run the caret sits in, not the
+    /// paragraph's — inside an English quotation in an Arabic paragraph
+    /// it reports left-to-right. That is what an arrow key needs: which
+    /// way the caret travels visually when it steps one character
+    /// forward logically.
+    ///
+    /// Falls back to the paragraph direction at a position no run
+    /// covers (an empty block, or the very end of the text), and to
+    /// `LeftToRight` when there is no layout at all.
+    pub fn direction_at(&self, position: usize) -> TextDirection {
+        let Some(block) = self.block_containing(position) else {
+            return TextDirection::LeftToRight;
+        };
+        let offset = position.saturating_sub(block.position);
+
+        for line in &block.lines {
+            if offset < line.char_range.start || offset > line.char_range.end {
+                continue;
+            }
+            // Compare against each run's own cluster span rather than
+            // asking `cluster_end` per glyph: that scans every glyph on
+            // the line, which made this quadratic in line length on a
+            // path every arrow keypress runs.
+            for run in &line.runs {
+                let mut lo = usize::MAX;
+                let mut hi = 0usize;
+                for g in &run.shaped_run.glyphs {
+                    let c = g.cluster as usize;
+                    lo = lo.min(c);
+                    hi = hi.max(c);
+                }
+                if lo == usize::MAX {
+                    continue;
+                }
+                // `hi` is the last cluster's *start*; the run reaches at
+                // least one character past it.
+                if offset >= lo && offset <= hi.max(lo) {
+                    return run.shaped_run.direction;
+                }
+            }
+        }
+        block.base_direction
+    }
+
+    /// The base direction of the paragraph containing `position`.
+    ///
+    /// Home and End want this one rather than [`direction_at`]: they move
+    /// to the logical ends of the line, and which visual edge those land
+    /// on is a property of the paragraph, not of whatever run the caret
+    /// happens to be sitting in.
+    pub fn paragraph_direction_at(&self, position: usize) -> TextDirection {
+        self.block_containing(position)
+            .map(|b| b.base_direction)
+            .unwrap_or(TextDirection::LeftToRight)
+    }
+
+    /// The document positions of the start and end of the *visual* line
+    /// containing `position` — i.e. what Home and End should move to.
+    ///
+    /// These are logical ends: the start is the lowest character offset
+    /// on the line whichever screen edge that sits on. Asking the
+    /// question this way rather than hit-testing a far-off-screen x
+    /// keeps Home and End correct in right-to-left paragraphs, where the
+    /// logical start is drawn on the right, and avoids depending on how
+    /// a hit-test clamps coordinates outside the text.
+    ///
+    /// `affinity` picks the line at a soft-wrap boundary, where one
+    /// position belongs to both the end of one line and the start of the
+    /// next. Returns `None` if there is no layout for `position`.
+    pub fn visual_line_range_at(
+        &self,
+        position: usize,
+        affinity: crate::types::CursorAffinity,
+    ) -> Option<(usize, usize)> {
+        let block = self.block_containing(position)?;
+        let offset = position.saturating_sub(block.position);
+
+        let mut candidates = block
+            .lines
+            .iter()
+            .filter(|l| offset >= l.char_range.start && offset <= l.char_range.end);
+        let first = candidates.next()?;
+
+        // Two lines can claim a boundary offset. Per `CursorAffinity`:
+        // Downstream renders at the END of the previous wrap line,
+        // Upstream at the START of the next one.
+        let line = match candidates.next() {
+            Some(second) if affinity == crate::types::CursorAffinity::Upstream => second,
+            Some(_) => first,
+            None => first,
+        };
+
+        Some((
+            block.position + line.char_range.start,
+            block.position + line.char_range.end,
+        ))
+    }
+
+    /// The laid-out block whose character range covers `position`.
+    ///
+    /// Searches top-level blocks, table cells and frames, so a caret
+    /// inside a table or a blockquote resolves like any other.
+    fn block_containing<'a>(
+        &'a self,
+        position: usize,
+    ) -> Option<&'a crate::layout::block::BlockLayout> {
+        // `end` is inclusive so a caret at the very end of a block still
+        // resolves, but that makes a block boundary match *two* blocks.
+        // `blocks` is a HashMap, so picking whichever `find` reached
+        // first made the answer depend on hash order — Home/End and the
+        // arrow keys behaved differently from run to run at every
+        // paragraph start. Prefer a block that strictly contains the
+        // position, and fall back to a boundary match only if none does.
+        let strictly_inside = |b: &crate::layout::block::BlockLayout| {
+            let end = block_end(b);
+            position >= b.position && position < end
+        };
+        let covers = |b: &crate::layout::block::BlockLayout| {
+            position >= b.position && position <= block_end(b)
+        };
+
+        fn block_end(b: &crate::layout::block::BlockLayout) -> usize {
+            b.lines
+                .last()
+                .map(|l| b.position + l.char_range.end)
+                .unwrap_or(b.position)
+        }
+
+        // Deterministic tie-break among boundary matches: the latest
+        // block that starts at or before the position.
+        fn best<'b>(
+            acc: Option<&'b crate::layout::block::BlockLayout>,
+            b: &'b crate::layout::block::BlockLayout,
+        ) -> Option<&'b crate::layout::block::BlockLayout> {
+            match acc {
+                Some(prev) if prev.position >= b.position => Some(prev),
+                _ => Some(b),
+            }
+        }
+
+        if let Some(b) = self
+            .flow_layout
+            .blocks
+            .values()
+            .filter(|b| strictly_inside(b))
+            .fold(None, best)
+        {
+            return Some(b);
+        }
+        if let Some(b) = self
+            .flow_layout
+            .blocks
+            .values()
+            .filter(|b| covers(b))
+            .fold(None, best)
+        {
+            return Some(b);
+        }
+        for table in self.flow_layout.tables.values() {
+            for cell in &table.cell_layouts {
+                if let Some(b) = cell.blocks.iter().find(|b| covers(b)) {
+                    return Some(b);
+                }
+            }
+        }
+        for frame in self.flow_layout.frames.values() {
+            if let Some(b) = frame.blocks.iter().find(|b| covers(b)) {
+                return Some(b);
+            }
+        }
+        None
+    }
+
     /// Whether a block lives inside any table cell.
     pub fn is_block_in_table(&self, block_id: usize) -> bool {
         self.flow_layout.tables.values().any(|table| {
@@ -2325,6 +2507,7 @@ mod tests {
 
     fn block(id: usize, text: &str) -> BlockLayoutParams {
         BlockLayoutParams {
+            base_direction: Default::default(),
             block_id: id,
             position: 0,
             text: text.to_string(),

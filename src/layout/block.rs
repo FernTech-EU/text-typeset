@@ -1,11 +1,11 @@
 use crate::font::registry::FontRegistry;
 use crate::font::resolve::{ResolvedFont, resolve_font};
 use crate::layout::line::LayoutLine;
-use crate::layout::paragraph::{Alignment, Hyphenator, break_into_lines};
+use crate::layout::paragraph::{Alignment, Hyphenator, RunOrder, break_into_lines};
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
 use crate::shaping::shaper::{
-    FontMetricsPx, TextDirection, font_metrics_px, shape_text, shape_text_with_fallback,
-    to_harfrust_features,
+    BidiParagraph, FontMetricsPx, TextDirection, analyze_paragraph, font_metrics_px, shape_text,
+    shape_text_with_fallback, to_harfrust_features,
 };
 
 /// Computed layout for a single block (paragraph).
@@ -27,6 +27,12 @@ pub struct BlockLayout {
     /// Shaped list marker (positioned to the left of the content area).
     /// None if the block is not a list item.
     pub list_marker: Option<ShapedListMarker>,
+    /// The paragraph's *resolved* base direction — never `Auto`.
+    ///
+    /// `BlockLayoutParams::base_direction` may ask for auto-detection;
+    /// this is what the bidi analysis actually settled on. Selection
+    /// painting and caret motion need the answer, not the question.
+    pub base_direction: TextDirection,
     /// Block background color (RGBA). None means transparent.
     pub background_color: Option<[f32; 4]>,
 }
@@ -59,6 +65,17 @@ pub struct BlockLayoutParams {
     pub list_indent: f32,
     /// Tab stop positions in pixels from the left margin.
     pub tab_positions: Vec<f32>,
+    /// The paragraph's base reading direction.
+    ///
+    /// `Auto` applies UAX #9 rules P2/P3 (first strong character wins).
+    /// An explicit direction overrides that, which is what a stored
+    /// per-block direction is for: auto-detection reads an Arabic
+    /// paragraph opening with a Latin acronym as left-to-right.
+    ///
+    /// Drives three things: which direction each bidi run shapes with,
+    /// the visual order of a line's runs, and — when `alignment` is
+    /// `Start`/`End` — which edge the text sits against.
+    pub base_direction: TextDirection,
     /// Line height multiplier. 1.0 = normal (from font metrics), 1.5 = 150%, 2.0 = double.
     /// None means use font metrics (ascent + descent + leading).
     pub line_height_multiplier: Option<f32>,
@@ -124,6 +141,42 @@ pub struct FragmentParams {
     pub features: Vec<crate::types::FontFeature>,
 }
 
+/// The directional slices of one fragment, in logical order.
+///
+/// Intersects the fragment's byte span with the paragraph's bidi runs and
+/// yields `(span, direction, level)` for each overlap. A fragment lying
+/// wholly inside one bidi run — the overwhelmingly common case — yields a
+/// single slice covering it, so uniform text costs nothing extra.
+///
+/// Falls back to one `Auto` slice when the analysis produced no runs
+/// (empty block text), which preserves the pre-bidi behaviour.
+fn fragment_bidi_slices(
+    bidi: &BidiParagraph,
+    frag: &FragmentParams,
+) -> Vec<(std::ops::Range<usize>, TextDirection, u8)> {
+    let frag_end = frag.offset + frag.text.len();
+
+    if bidi.runs.is_empty() {
+        return vec![(frag.offset..frag_end, TextDirection::Auto, 0)];
+    }
+
+    let mut slices = Vec::new();
+    for run in &bidi.runs {
+        let start = run.byte_range.start.max(frag.offset);
+        let end = run.byte_range.end.min(frag_end);
+        if start < end {
+            slices.push((start..end, run.direction, run.level));
+        }
+    }
+
+    // A fragment outside the analysed text (a host bug, or a zero-length
+    // fragment) still deserves a shot at shaping rather than vanishing.
+    if slices.is_empty() {
+        slices.push((frag.offset..frag_end, TextDirection::Auto, 0));
+    }
+    slices
+}
+
 /// Lay out a single block: resolve fonts, shape fragments, break into lines.
 ///
 /// `scale_factor` is the device pixel ratio. Layout output is always in
@@ -138,6 +191,14 @@ pub fn layout_block(
     let effective_left_margin = params.left_margin + params.list_indent;
     let content_width = (available_width - effective_left_margin - params.right_margin).max(0.0);
 
+    // Resolve the paragraph's bidi structure once, over the whole block
+    // text. It has to be the whole text: the algorithm's resolution of a
+    // neutral character (a space, a comma) depends on the strong
+    // characters on *both* sides of it, which a per-fragment analysis
+    // cannot see.
+    let bidi = analyze_paragraph(&params.text, params.base_direction);
+    let base_direction = bidi.base_direction();
+
     // Resolve fonts and shape each fragment
     let mut shaped_runs = Vec::new();
     let mut default_metrics: Option<FontMetricsPx> = None;
@@ -145,6 +206,15 @@ pub fn layout_block(
     for frag in &params.fragments {
         // Inline image: create a synthetic run with one placeholder glyph
         if let Some(ref image_name) = frag.image_name {
+            // An image is a neutral character in the bidi algorithm, so
+            // it takes the level of whatever run covers its offset.
+            // Hardcoding 0 left it at paragraph level inside RTL prose,
+            // where it broke the contiguous run rule L2 reverses and so
+            // stayed on the wrong side of the text around it.
+            let (image_direction, image_level) = fragment_bidi_slices(&bidi, frag)
+                .first()
+                .map(|(_, d, l)| (*d, *l))
+                .unwrap_or((TextDirection::LeftToRight, 0));
             let image_glyph = ShapedGlyph {
                 glyph_id: 0,
                 cluster: 0,
@@ -161,7 +231,8 @@ pub fn layout_block(
                 glyphs: vec![image_glyph],
                 advance_width: frag.image_width,
                 text_range: frag.offset..frag.offset + frag.text.len(),
-                direction: TextDirection::LeftToRight,
+                direction: image_direction,
+                bidi_level: image_level,
                 underline_style: frag.underline_style,
                 overline: false,
                 strikeout: false,
@@ -206,36 +277,54 @@ pub fn layout_block(
             }
 
             let features = to_harfrust_features(&frag.features);
-            if let Some(mut run) = shape_text_with_fallback(
-                registry,
-                &resolved,
-                &frag.text,
-                frag.offset,
-                TextDirection::Auto,
-                &features,
-            ) {
-                run.underline_style = frag.underline_style;
-                run.overline = frag.overline;
-                run.strikeout = frag.strikeout;
-                run.is_link = frag.is_link;
-                run.foreground_color = frag.foreground_color;
-                run.underline_color = frag.underline_color;
-                run.background_color = frag.background_color;
-                run.anchor_href = frag.anchor_href.clone();
-                run.tooltip = frag.tooltip.clone();
-                run.vertical_alignment = frag.vertical_alignment;
 
-                // Apply letter_spacing and word_spacing post-shaping
-                if frag.letter_spacing != 0.0 || frag.word_spacing != 0.0 {
-                    apply_spacing(&mut run, &frag.text, frag.letter_spacing, frag.word_spacing);
+            // Shape each directional slice of the fragment separately. A
+            // fragment is a *formatting* span (one bold/italic/font run),
+            // which has nothing to do with where the text changes
+            // direction — so shaping a fragment as a single unit is what
+            // left mixed Arabic/Latin prose in raw logical order. Cutting
+            // it at the bidi boundaries gives every run one uniform
+            // direction, and `break_into_lines` reorders them per line.
+            for (span, direction, level) in fragment_bidi_slices(&bidi, frag) {
+                let local = (span.start - frag.offset)..(span.end - frag.offset);
+                let Some(piece) = frag.text.get(local) else {
+                    // The host's fragment offsets disagree with the block
+                    // text it also supplied. Nothing good can come of
+                    // guessing which is right; skip the slice rather than
+                    // panic on a bad byte index.
+                    continue;
+                };
+                if piece.is_empty() {
+                    continue;
                 }
 
-                // Apply tab stops
-                if !params.tab_positions.is_empty() {
-                    apply_tab_stops(&mut run, &frag.text, &params.tab_positions);
-                }
+                if let Some(mut run) = shape_text_with_fallback(
+                    registry, &resolved, piece, span.start, direction, &features,
+                ) {
+                    run.bidi_level = level;
+                    run.underline_style = frag.underline_style;
+                    run.overline = frag.overline;
+                    run.strikeout = frag.strikeout;
+                    run.is_link = frag.is_link;
+                    run.foreground_color = frag.foreground_color;
+                    run.underline_color = frag.underline_color;
+                    run.background_color = frag.background_color;
+                    run.anchor_href = frag.anchor_href.clone();
+                    run.tooltip = frag.tooltip.clone();
+                    run.vertical_alignment = frag.vertical_alignment;
 
-                shaped_runs.push(run);
+                    // Both of these map `glyph.cluster` back into the text
+                    // they were shaped from, so they get the slice — not
+                    // the whole fragment.
+                    if frag.letter_spacing != 0.0 || frag.word_spacing != 0.0 {
+                        apply_spacing(&mut run, piece, frag.letter_spacing, frag.word_spacing);
+                    }
+                    if !params.tab_positions.is_empty() {
+                        apply_tab_stops(&mut run, piece, &params.tab_positions);
+                    }
+
+                    shaped_runs.push(run);
+                }
             }
         }
     }
@@ -272,6 +361,7 @@ pub fn layout_block(
         params.text_indent,
         &metrics,
         hyphenator,
+        RunOrder::Logical(base_direction),
     );
 
     // Apply line height multiplier
@@ -302,6 +392,7 @@ pub fn layout_block(
     BlockLayout {
         block_id: params.block_id,
         position: params.position,
+        base_direction,
         lines,
         y: 0.0, // set by flow layout
         height: total_height,

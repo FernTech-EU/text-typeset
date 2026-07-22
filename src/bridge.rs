@@ -11,6 +11,7 @@ use text_document::{
 use crate::layout::block::{BlockLayoutParams, FragmentParams, PaintSpan};
 use crate::layout::frame::{FrameLayoutParams, FramePosition};
 use crate::layout::paragraph::Alignment;
+use crate::shaping::shaper::TextDirection;
 use crate::layout::table::{CellLayoutParams, TableLayoutParams};
 
 const DEFAULT_LIST_INDENT: f32 = 24.0;
@@ -208,6 +209,7 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
         text: block.text.clone(),
         fragments,
         alignment,
+        base_direction: convert_direction(block.block_format.direction.as_ref()),
         top_margin: block.block_format.top_margin.unwrap_or(0) as f32,
         bottom_margin: block.block_format.bottom_margin.unwrap_or(0) as f32,
         left_margin: block.block_format.left_margin.unwrap_or(0) as f32,
@@ -628,6 +630,20 @@ fn convert_alignment(a: &text_document::Alignment) -> Alignment {
         text_document::Alignment::Right => Alignment::Right,
         text_document::Alignment::Center => Alignment::Center,
         text_document::Alignment::Justify => Alignment::Justify,
+    }
+}
+
+/// Map a block's stored reading direction onto a shaping direction.
+///
+/// `None` means the writer never set one, so the text decides
+/// (UAX #9 P2/P3). A stored direction overrides that detection — which is
+/// the point of storing it, since an Arabic paragraph opening with a
+/// Latin acronym auto-detects as left-to-right.
+fn convert_direction(d: Option<&text_document::TextDirection>) -> TextDirection {
+    match d {
+        None => TextDirection::Auto,
+        Some(text_document::TextDirection::LeftToRight) => TextDirection::LeftToRight,
+        Some(text_document::TextDirection::RightToLeft) => TextDirection::RightToLeft,
     }
 }
 

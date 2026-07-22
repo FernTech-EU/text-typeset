@@ -91,6 +91,9 @@ mod font_service;
 
 // Public API
 pub use layout::block::{PaintSpan, apply_paint_spans};
+/// Reading direction of a run or paragraph. Re-exported at the crate
+/// root because hosts need it to interpret `DocumentFlow::direction_at`.
+pub use shaping::shaper::TextDirection;
 pub use layout::inline_markup::{InlineAttrs, InlineMarkup, InlineSpan};
 pub use types::{
     BlockVisualInfo, CharacterGeometry, CursorAffinity, CursorDisplay, DecorationKind,

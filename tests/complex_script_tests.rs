@@ -21,12 +21,35 @@ fn typesetter_with(font: &[u8]) -> Typesetter {
     ts
 }
 
-/// Glyph id of the single glyph produced by shaping `text` in isolation.
-fn isolated_glyph(ts: &Typesetter, text: &str) -> u16 {
+/// Every glyph id produced by shaping `text` on its own.
+///
+/// A single Arabic letter is not a single glyph: in Noto Sans Arabic each
+/// of these decomposes into a base plus its dots (kaf `[357, 58]`, teh
+/// `[286, 14]`, beh `[315, 14]`). An oracle that kept only the *first*
+/// glyph would leave the dot components out of the "isolated" set, and
+/// then any assertion of the form "some glyph is not isolated" passes on
+/// the strength of a dot alone — whether or not joining happened. That is
+/// exactly the false positive this helper replaces, so it deliberately
+/// returns the whole sequence.
+fn isolated_glyphs(ts: &Typesetter, text: &str) -> Vec<u16> {
     let resolved =
         resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
     let run = shape_text(ts.font_registry(), &resolved, text, 0).unwrap();
-    run.glyphs.first().map(|g| g.glyph_id).unwrap_or(0)
+    run.glyphs.iter().map(|g| g.glyph_id).collect()
+}
+
+/// ك kaf, ت teh, ب beh — the letters of "كتب", all of which connect.
+const KAF: &str = "\u{0643}";
+const TEH: &str = "\u{062A}";
+const BEH: &str = "\u{0628}";
+const KATABA: &str = "\u{0643}\u{062A}\u{0628}";
+
+/// The union of every glyph the three letters produce standing alone.
+fn isolated_repertoire(ts: &Typesetter) -> HashSet<u16> {
+    [KAF, TEH, BEH]
+        .into_iter()
+        .flat_map(|l| isolated_glyphs(ts, l))
+        .collect()
 }
 
 #[test]
@@ -35,21 +58,15 @@ fn arabic_letters_join_into_contextual_forms() {
     let resolved =
         resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
 
-    // Isolated forms of kaf, teh, beh.
-    let isolated: HashSet<u16> = [
-        isolated_glyph(&ts, "\u{0643}"), // ك kaf
-        isolated_glyph(&ts, "\u{062A}"), // ت teh
-        isolated_glyph(&ts, "\u{0628}"), // ب beh
-    ]
-    .into_iter()
-    .collect();
+    let isolated = isolated_repertoire(&ts);
 
-    // The word "كتب" (kataba) — these three letters connect, so each
-    // takes an initial/medial/final form distinct from its isolated form.
+    // The word "كتب" (kataba). Because the three letters connect, each
+    // takes an initial/medial/final form — glyphs that appear in *none*
+    // of the isolated renderings.
     let word = shape_text_directed(
         ts.font_registry(),
         &resolved,
-        "\u{0643}\u{062A}\u{0628}",
+        KATABA,
         0,
         TextDirection::RightToLeft,
         &[],
@@ -62,10 +79,56 @@ fn arabic_letters_join_into_contextual_forms() {
     );
 
     let joined: Vec<u16> = word.glyphs.iter().map(|g| g.glyph_id).collect();
+    let contextual: Vec<u16> = joined
+        .iter()
+        .copied()
+        .filter(|g| !isolated.contains(g))
+        .collect();
+
+    // The real oracle: at least one glyph outside the isolated
+    // repertoire. Merely *reordering* the isolated forms — which is what
+    // the explicit-direction path did while `buffer.script` went unset —
+    // yields a `joined` drawn entirely from `isolated`, and fails here.
     assert!(
-        joined.iter().any(|g| !isolated.contains(g)),
-        "Arabic joining should produce contextual glyph forms distinct \
-         from the isolated letters; got {joined:?}, isolated {isolated:?}"
+        !contextual.is_empty(),
+        "Arabic joining should produce contextual glyph forms outside the \
+         isolated repertoire; got {joined:?}, all of which are isolated \
+         forms drawn from {isolated:?} — the letters did not join"
+    );
+}
+
+#[test]
+fn arabic_joining_survives_an_explicit_direction() {
+    let ts = typesetter_with(NOTO_ARABIC);
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
+
+    let shape = |dir| {
+        let run = shape_text_directed(ts.font_registry(), &resolved, KATABA, 0, dir, &[]).unwrap();
+        run.glyphs.iter().map(|g| g.glyph_id).collect::<Vec<u16>>()
+    };
+
+    // Pure-Arabic text auto-detects as RTL, so naming that direction
+    // explicitly must not change a thing. It used to: an explicit
+    // direction skipped `guess_segment_properties`, leaving the buffer's
+    // script `None`, and harfrust fell back to DEFAULT_SHAPER — which
+    // requests no init/medi/fina/isol and so never joins. The bidi-aware
+    // layout path always shapes with an explicit direction, so that path
+    // alone rendered Arabic disconnected.
+    assert_eq!(
+        shape(TextDirection::RightToLeft),
+        shape(TextDirection::Auto),
+        "explicitly naming the direction that auto-detection would have \
+         picked must produce identical glyphs"
+    );
+
+    // And it is joined, not merely equal-and-broken.
+    let isolated = isolated_repertoire(&ts);
+    assert!(
+        shape(TextDirection::RightToLeft)
+            .iter()
+            .any(|g| !isolated.contains(g)),
+        "the explicit-direction path must produce joined forms"
     );
 }
 

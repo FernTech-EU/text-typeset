@@ -583,6 +583,7 @@ fn hit_test_link_region_detected() {
     let mut ts = make_typesetter();
     // Create a block where the text is marked as a link
     let block = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "Click here".to_string(),

@@ -154,6 +154,7 @@ fn relayout_block_updates_render() {
 
     // Replace first block with longer text
     let longer = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "This is a much longer first paragraph.".to_string(),
@@ -243,6 +244,7 @@ fn multi_fragment_block_renders_all_glyphs() {
     let mut ts = make_typesetter();
     let text = "Hello world";
     let block = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: text.to_string(),
@@ -364,6 +366,7 @@ fn glyph_x_positions_increase_left_to_right() {
 fn underline_produces_decoration_rect() {
     let mut ts = make_typesetter();
     let block = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "underlined text".to_string(),
@@ -431,6 +434,7 @@ fn underline_produces_decoration_rect() {
 fn strikeout_produces_decoration_rect() {
     let mut ts = make_typesetter();
     let block = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "struck text".to_string(),
@@ -519,6 +523,7 @@ fn letter_spacing_increases_total_width() {
     // Same text with letter_spacing=5.0
     let mut ts2 = make_typesetter();
     let spaced = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "Hello".to_string(),
@@ -590,6 +595,7 @@ fn word_spacing_increases_gap_between_words() {
 
     let mut ts2 = make_typesetter();
     let spaced = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "A B".to_string(),
@@ -765,6 +771,7 @@ fn render_block_only_falls_back_when_scroll_offset_changed() {
 fn list_marker_renders_extra_glyphs() {
     let mut ts = make_typesetter();
     let block = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "Item text".to_string(),
@@ -825,6 +832,7 @@ fn list_marker_renders_extra_glyphs() {
 fn list_marker_positioned_left_of_content() {
     let mut ts = make_typesetter();
     let block = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "Content".to_string(),
@@ -903,6 +911,7 @@ fn list_indent_shifts_content_right() {
     // Block with list indent
     let mut ts2 = make_typesetter();
     let listed = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "Hello".to_string(),
@@ -1406,6 +1415,7 @@ fn underline_inside_table_cell_produces_decoration() {
         row: 0,
         column: 0,
         blocks: vec![BlockLayoutParams {
+            base_direction: Default::default(),
             block_id: 1,
             position: 0,
             text: "underlined".to_string(),
@@ -1494,6 +1504,7 @@ fn underline_inside_frame_produces_decoration() {
         blocks: vec![(
             0,
             BlockLayoutParams {
+                base_direction: Default::default(),
                 block_id: 2,
                 position: 0,
                 text: "underlined".to_string(),
@@ -1649,6 +1660,7 @@ fn switching_from_fixed_to_auto() {
 fn overline_produces_decoration_rect() {
     let mut ts = make_typesetter();
     let block = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "overlined".to_string(),
@@ -1792,6 +1804,7 @@ fn relayout_block_shifts_table_below() {
 
     // Relayout block 1 with much longer text
     let longer = BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: "This is now a very long paragraph that takes up many lines at the current width."
@@ -2188,6 +2201,7 @@ fn nested_frame_contributes_to_content_height() {
 fn make_image_block(id: usize, image_name: &str, width: f32, height: f32) -> BlockLayoutParams {
     let text = "\u{FFFC}";
     BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: id,
         position: 0,
         text: text.to_string(),
@@ -2293,6 +2307,7 @@ fn mixed_text_and_image_both_render() {
     let mut ts = make_typesetter();
     let text = "Hello\u{FFFC}";
     ts.layout_blocks(vec![BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: 1,
         position: 0,
         text: text.to_string(),

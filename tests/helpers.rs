@@ -564,6 +564,7 @@ pub fn make_block(id: usize, text: &str) -> BlockLayoutParams {
 /// Same as make_block but with a non-zero document position.
 pub fn make_block_at(id: usize, position: usize, text: &str) -> BlockLayoutParams {
     BlockLayoutParams {
+        base_direction: Default::default(),
         block_id: id,
         position,
         text: text.to_string(),

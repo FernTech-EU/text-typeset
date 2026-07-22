@@ -7,7 +7,23 @@ use icu_segmenter::options::LineBreakOptions;
 
 use crate::layout::line::{LayoutLine, PositionedRun, RunDecorations};
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
-use crate::shaping::shaper::FontMetricsPx;
+use crate::shaping::shaper::{FontMetricsPx, TextDirection};
+
+/// How [`break_into_lines`] should treat the order of the runs it is given.
+///
+/// The two layout paths differ here and getting it wrong reverses text
+/// twice. The single-line path runs the bidi algorithm itself and shapes
+/// in display order, so its runs must be left alone; the block path hands
+/// over logical-order runs tagged with embedding levels and needs each
+/// line reordered once the breaks are known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunOrder {
+    /// Runs already arrive in visual order — do not reorder them.
+    AlreadyVisual,
+    /// Runs are in logical order; reorder each line per UAX #9 rule L2,
+    /// and resolve `Start`/`End` alignment against this base direction.
+    Logical(TextDirection),
+}
 
 /// Whether a break opportunity *must* be taken (LB4/LB5 hard line
 /// break) or *may* be taken (regular UAX #14 break opportunity).
@@ -181,13 +197,40 @@ pub struct Hyphenator {
 }
 
 /// Text alignment within a line.
+///
+/// `Left`/`Right` are absolute; `Start`/`End` are relative to the
+/// paragraph's base direction and are what an *unset* alignment should
+/// use. Keeping both lets a writer who explicitly chose "flush left" keep
+/// that in an RTL paragraph, while a paragraph nobody has aligned simply
+/// follows its own direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Alignment {
+    /// Leading edge: left in an LTR paragraph, right in an RTL one.
     #[default]
+    Start,
+    /// Trailing edge: right in an LTR paragraph, left in an RTL one.
+    End,
     Left,
     Right,
     Center,
     Justify,
+}
+
+impl Alignment {
+    /// Resolve the direction-relative variants against a base direction.
+    ///
+    /// Always returns an absolute alignment, so line layout never has to
+    /// think about direction again.
+    pub fn resolve_for(self, base: TextDirection) -> Alignment {
+        let rtl = base == TextDirection::RightToLeft;
+        match self {
+            Alignment::Start if rtl => Alignment::Right,
+            Alignment::Start => Alignment::Left,
+            Alignment::End if rtl => Alignment::Left,
+            Alignment::End => Alignment::Right,
+            absolute => absolute,
+        }
+    }
 }
 
 /// Break shaped runs into lines that fit within `available_width`.
@@ -199,6 +242,68 @@ pub enum Alignment {
 /// 4. Greedy line wrapping: accumulate glyph advances, break at the last
 ///    allowed opportunity before exceeding the width.
 /// 5. Apply alignment per line.
+/// Put a line's runs into visual order per UAX #9 rule L2, then re-lay
+/// their x positions left to right.
+///
+/// Line breaking is a logical operation and runs arrive in logical order,
+/// so this is where a mixed-direction line finally becomes visual. It has
+/// to run per line rather than per paragraph: reordering a paragraph
+/// before breaking it would let a wrap point fall in the middle of an
+/// already-reversed span and scramble every line after it.
+///
+/// The runs keep their glyphs untouched — harfrust already emitted those
+/// in visual order within each run. Only the runs' relative order and
+/// their x origins change.
+fn reorder_line_visually(line: &mut LayoutLine) {
+    if line.runs.len() < 2 {
+        return;
+    }
+    // Cheap scan before any allocation: with nothing right-to-left on
+    // the line there is nothing for rule L2 to reverse, and that is
+    // every line of an ordinary Latin document. Building the level and
+    // permutation vectors first would allocate twice per line on every
+    // relayout just to conclude the same thing.
+    if line
+        .runs
+        .iter()
+        .all(|r| r.shaped_run.bidi_level % 2 == 0)
+    {
+        return;
+    }
+
+    let levels: Vec<u8> = line
+        .runs
+        .iter()
+        .map(|r| r.shaped_run.bidi_level)
+        .collect();
+
+    let order = crate::shaping::shaper::visual_order(&levels);
+    if order.iter().copied().eq(0..order.len()) {
+        return; // already visual — the common all-LTR case
+    }
+
+    // The line's left edge, which `build_line` set to the first-line
+    // indent. Re-laying from here keeps the indent intact.
+    let origin = line.runs.iter().map(|r| r.x).fold(f32::INFINITY, f32::min);
+
+    let mut reordered: Vec<crate::layout::line::PositionedRun> = Vec::with_capacity(order.len());
+    let mut taken: Vec<Option<crate::layout::line::PositionedRun>> =
+        line.runs.drain(..).map(Some).collect();
+    for logical_idx in order {
+        if let Some(run) = taken[logical_idx].take() {
+            reordered.push(run);
+        }
+    }
+
+    let mut x = origin;
+    for run in &mut reordered {
+        run.x = x;
+        x += run.shaped_run.advance_width;
+    }
+    line.runs = reordered;
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn break_into_lines(
     runs: Vec<ShapedRun>,
     text: &str,
@@ -207,6 +312,7 @@ pub fn break_into_lines(
     first_line_indent: f32,
     metrics: &FontMetricsPx,
     hyphenator: Option<Hyphenator>,
+    run_order: RunOrder,
 ) -> Vec<LayoutLine> {
     if runs.is_empty() || text.is_empty() {
         // Empty paragraph: produce one empty line for the block to have height
@@ -333,14 +439,58 @@ pub fn break_into_lines(
         lines.push(line);
     }
 
-    // Apply alignment
+    // Put each line's runs into visual order before anything reads their
+    // x positions. Alignment shifts every run by the same amount so it
+    // does not care about order, but `justify_line` re-lays runs
+    // sequentially from the vector and would otherwise justify a
+    // mixed-direction line in logical order.
+    let base_direction = match run_order {
+        RunOrder::Logical(base) => {
+            for line in &mut lines {
+                reorder_line_visually(line);
+            }
+            base
+        }
+        // Already visual: reordering here would reverse the caller's work.
+        RunOrder::AlreadyVisual => TextDirection::LeftToRight,
+    };
+
+    // Apply alignment. An unset alignment follows the paragraph's base
+    // direction, so an RTL paragraph right-aligns without the host having
+    // to translate direction into alignment itself.
+    let alignment = alignment.resolve_for(base_direction);
+    let rtl_paragraph = base_direction == TextDirection::RightToLeft;
     let effective_width = available_width;
     let last_idx = lines.len().saturating_sub(1);
     for (i, line) in lines.iter_mut().enumerate() {
         let indent = if i == 0 { first_line_indent } else { 0.0 };
+        // A first-line indent insets from the paragraph's *leading* edge,
+        // which in an RTL paragraph is the right one. `build_line` always
+        // insets from the left, so undo that here and let the narrowed
+        // `line_avail` below carry the inset over to the right instead.
+        if rtl_paragraph && indent != 0.0 {
+            for run in &mut line.runs {
+                run.x -= indent;
+            }
+        }
         let line_avail = effective_width - indent;
         match alignment {
-            Alignment::Left => {} // runs already at x=0 (plus indent)
+            // `resolve_for` maps these onto Left/Right, so they cannot
+            // reach here — but fail soft rather than panicking in a
+            // layout pass that runs on every keystroke.
+            Alignment::Start | Alignment::End | Alignment::Left => {
+                // Runs already sit at the indent, except in an RTL
+                // paragraph where the block above moved them to 0 so the
+                // inset could go to the trailing edge. An explicit Left
+                // means the writer wants flush-left text, and the indent
+                // still belongs on the paragraph's leading edge, so put
+                // it back.
+                if rtl_paragraph && indent != 0.0 {
+                    for run in &mut line.runs {
+                        run.x += indent;
+                    }
+                }
+            }
             Alignment::Right => {
                 let shift = (line_avail - line.width).max(0.0);
                 for run in &mut line.runs {
@@ -607,6 +757,7 @@ fn extract_sub_run(
         advance_width: advance,
         text_range: run.text_range.clone(),
         direction: run.direction,
+        bidi_level: run.bidi_level,
         underline_style: run.underline_style,
         overline: run.overline,
         strikeout: run.strikeout,
