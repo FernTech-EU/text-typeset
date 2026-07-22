@@ -1865,10 +1865,17 @@ impl DocumentFlow {
             // a spell-checked line into a run per range, so `x_for_offset`-per-char
             // is O(chars × runs) per line and turns quadratic on a dense document
             // (this dominated the accessibility rebuild on a Lorem scene with tens
-            // of thousands of ranges). Stable-sort by offset then dedup keeps the
-            // first (leftmost) x per offset — the same tie-break `x_for_offset`
-            // makes with its find-first — so the geometry is unchanged.
-            let mut stops = line.caret_stops();
+            // of thousands of ranges). Stable-sort by offset then dedup keeps
+            // the first (leftmost) x per offset.
+            //
+            // At a direction boundary an offset has two stops at different x,
+            // and this deliberately keeps the leftmost rather than following
+            // affinity the way `x_for_offset` now does: these are character
+            // *extents* for a screen reader, which has no caret and so no
+            // affinity to consult. A stable choice matters more than which
+            // side it lands on.
+            let mut stops: Vec<(usize, f32)> =
+                line.caret_stops().iter().map(|s| (s.offset, s.x)).collect();
             stops.sort_by_key(|(o, _)| *o);
             stops.dedup_by_key(|(o, _)| *o);
             for c in local_start..local_end {
@@ -2225,6 +2232,26 @@ impl DocumentFlow {
             }
         }
         None
+    }
+
+    /// Whether `position` sits on a direction boundary — a place where
+    /// an LTR run meets an RTL one and the caret has two possible x on
+    /// the same line.
+    ///
+    /// The widget layer uses this to decide whether moving the caret
+    /// here has to choose a side: at an ordinary position affinity makes
+    /// no difference and can be left alone, but at a seam the caret
+    /// jumps across the line if it carries the wrong one.
+    pub fn is_direction_boundary_at(&self, position: usize) -> bool {
+        let Some(block) = self.block_containing(position) else {
+            return false;
+        };
+        let offset = position.saturating_sub(block.position);
+        block
+            .lines
+            .iter()
+            .filter(|l| offset >= l.char_range.start && offset <= l.char_range.end)
+            .any(|l| l.is_direction_boundary(offset))
     }
 
     /// Whether a block lives inside any table cell.

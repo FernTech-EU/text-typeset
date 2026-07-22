@@ -681,7 +681,11 @@ fn caret_rect_in_block(
     }
 
     let line = matched?;
-    let caret_x = line.x_for_offset(offset_in_block) + block.left_margin + offset_x;
+    // Affinity resolves a direction boundary here as well as the wrap
+    // boundary it picked the line with: where an LTR run meets an RTL
+    // one, this offset has two x on the *same* line.
+    let caret_x =
+        line.x_for_offset_with_affinity(offset_in_block, affinity) + block.left_margin + offset_x;
     let caret_y = offset_y + block.y + line.y - line.ascent - scroll_offset;
     // The caret spans the natural glyph box (ascent + descent + leading), NOT
     // the block's `line_height`: with a line-height multiplier > 1 the latter is

@@ -471,3 +471,91 @@ fn a_partly_selected_cluster_still_paints() {
     }
     let _ = &mut params;
 }
+
+// ── Stage 7: the caret at a direction seam ─────────────────────
+
+/// Caret x at `offset` under each affinity, for a one-line block.
+fn caret_x_both_ways(ts: &Typesetter, params: &text_typeset::layout::block::BlockLayoutParams,
+                     offset: usize) -> (f32, f32) {
+    let line = single_line(ts, params);
+    (
+        line.x_for_offset_with_affinity(offset, text_typeset::CursorAffinity::Downstream),
+        line.x_for_offset_with_affinity(offset, text_typeset::CursorAffinity::Upstream),
+    )
+}
+
+#[test]
+fn a_direction_seam_gives_the_caret_two_places_to_be() {
+    let ts = bilingual();
+    // "abc<arabic>" — the offset between the Latin and the Arabic is
+    // both the trailing edge of "abc" and the leading edge of the
+    // Arabic word, and those are at different x.
+    let text = format!("abc{KATABA}");
+    let mut params = make_block(0, &text);
+    params.base_direction = TextDirection::LeftToRight;
+
+    let seam = 3; // just after "abc"
+    let line = single_line(&ts, &params);
+    assert!(
+        line.is_direction_boundary(seam),
+        "offset {seam} should be a direction boundary in {text:?}"
+    );
+
+    let (downstream, upstream) = caret_x_both_ways(&ts, &params, seam);
+    assert_ne!(
+        downstream, upstream,
+        "the two affinities must resolve to different x at a seam — that \
+         ambiguity is the whole reason the axis exists"
+    );
+
+    // Downstream attaches to the text *before* the offset, so it sits at
+    // the right edge of "abc"; upstream attaches to the Arabic, whose
+    // leading edge is its own right-hand side, further right.
+    assert!(
+        upstream > downstream,
+        "upstream should sit at the RTL run's leading (right) edge, \
+         downstream at the end of the Latin; got down={downstream}, up={upstream}"
+    );
+}
+
+#[test]
+fn affinity_does_nothing_away_from_a_seam() {
+    let ts = bilingual();
+    let mut params = make_block(0, "abcdef");
+    params.base_direction = TextDirection::LeftToRight;
+
+    let line = single_line(&ts, &params);
+    for offset in 0..=6 {
+        assert!(
+            !line.is_direction_boundary(offset),
+            "uniform Latin text has no direction boundary at {offset}"
+        );
+        let (d, u) = caret_x_both_ways(&ts, &params, offset);
+        assert_eq!(
+            d, u,
+            "affinity must be a no-op at offset {offset} of uniform text"
+        );
+    }
+}
+
+#[test]
+fn the_caret_rect_follows_the_chosen_side_of_a_seam() {
+    let mut ts = bilingual();
+    let text = format!("abc{KATABA}");
+    let mut params = make_block(1, &text);
+    params.base_direction = TextDirection::LeftToRight;
+    ts.layout_blocks(vec![params]);
+
+    let seam = 3;
+    let downstream = ts.caret_rect_with_affinity(seam, text_typeset::CursorAffinity::Downstream);
+    let upstream = ts.caret_rect_with_affinity(seam, text_typeset::CursorAffinity::Upstream);
+
+    // The rect is what actually gets painted, so the axis has to survive
+    // the whole way out — not just the line-level helper.
+    assert_ne!(
+        downstream[0], upstream[0],
+        "caret_rect must honour the bidi axis; got {downstream:?} and {upstream:?}"
+    );
+    assert!(downstream.iter().all(|v| v.is_finite()));
+    assert!(upstream.iter().all(|v| v.is_finite()));
+}
