@@ -8,9 +8,11 @@
 mod helpers;
 use std::collections::HashSet;
 
-use helpers::{NOTO_ARABIC, NOTO_DEVANAGARI, NOTO_HEBREW, Typesetter};
+use helpers::{NOTO_ARABIC, NOTO_DEVANAGARI, NOTO_HEBREW, NOTO_SANS, Typesetter};
 use text_typeset::font::resolve::resolve_font;
-use text_typeset::shaping::shaper::{TextDirection, shape_text, shape_text_directed};
+use text_typeset::shaping::shaper::{
+    TextDirection, shape_text, shape_text_directed, shape_text_with_fallback,
+};
 
 /// Build a typesetter whose default font is the given face.
 fn typesetter_with(font: &[u8]) -> Typesetter {
@@ -192,5 +194,62 @@ fn hebrew_rtl_glyphs_are_in_visual_order() {
     assert!(
         clusters.first() > clusters.last(),
         "expected descending clusters across the RTL run; got {clusters:?}"
+    );
+}
+
+#[test]
+fn arabic_joins_when_it_arrives_through_glyph_fallback() {
+    // The realistic case, and the one that was broken: the writing font is
+    // a Latin serif with no Arabic at all, so every Arabic character
+    // reaches the shaper as .notdef and is re-shaped in a fallback font.
+    //
+    // That path used to substitute one character at a time and keep only
+    // the first glyph of each result. A letter shaped alone has no
+    // neighbours and can only take its isolated form, and dropping the
+    // second glyph dropped the dots — so Arabic set in a Latin font came
+    // out as disconnected, dotless stumps. Shaping the whole .notdef span
+    // in the fallback font instead makes it identical to shaping it in
+    // that font directly.
+    let mut fallback = Typesetter::new();
+    let latin = fallback.register_font(NOTO_SANS);
+    fallback.register_font(NOTO_ARABIC);
+    fallback.set_default_font(latin, 16.0);
+
+    let mut native = Typesetter::new();
+    let arabic = native.register_font(NOTO_ARABIC);
+    native.set_default_font(arabic, 16.0);
+
+    let glyphs = |ts: &Typesetter| -> Vec<u16> {
+        let resolved =
+            resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
+        shape_text_with_fallback(
+            ts.font_registry(),
+            &resolved,
+            KATABA,
+            0,
+            TextDirection::RightToLeft,
+            &[],
+        )
+        .unwrap()
+        .glyphs
+        .iter()
+        .map(|g| g.glyph_id)
+        .collect()
+    };
+
+    let via_fallback = glyphs(&fallback);
+    let direct = glyphs(&native);
+
+    assert!(
+        via_fallback.iter().all(|&g| g != 0),
+        "fallback should have resolved every glyph; got {via_fallback:?}"
+    );
+    assert_eq!(
+        via_fallback, direct,
+        "Arabic reached through glyph fallback must shape the same as Arabic \
+         shaped natively — {} glyphs vs {}; per-character fallback yields the \
+         isolated bases with the dots stripped",
+        via_fallback.len(),
+        direct.len()
     );
 }

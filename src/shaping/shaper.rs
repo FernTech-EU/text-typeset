@@ -90,10 +90,21 @@ pub fn shape_text_with_fallback(
 
 /// Re-shape .notdef glyphs using fallback fonts.
 ///
-/// For each .notdef glyph, finds the source character via the cluster value,
-/// queries all registered fonts for coverage, and if one covers it,
-/// shapes that single character with the fallback font and replaces
-/// the .notdef glyph with the result.
+/// Works on **spans** of consecutive .notdef glyphs, not on glyphs one at a
+/// time: each span is mapped back to the character range that produced it and
+/// that whole range is re-shaped in the fallback font, then spliced in.
+///
+/// Shaping a span as a unit is what makes complex scripts survive fallback.
+/// Re-shaping character by character — which this used to do — cannot join
+/// Arabic, because a letter shaped alone has no neighbours and can only take
+/// its isolated form. It also kept only the *first* glyph of each result, so
+/// any letter whose isolated form is a base plus a mark lost the mark. An
+/// Arabic word set in a font without Arabic came out as disconnected,
+/// dotless stumps.
+///
+/// A span is re-shaped with the run's own direction rather than `Auto`, so
+/// the substituted glyphs come back in the same visual order as the ones
+/// around them.
 fn apply_glyph_fallback(
     registry: &FontRegistry,
     primary: &ResolvedFont,
@@ -104,30 +115,44 @@ fn apply_glyph_fallback(
 ) {
     use crate::font::resolve::find_fallback_font;
 
-    for glyph in &mut run.glyphs {
-        if glyph.glyph_id != 0 {
-            continue;
+    // Maximal spans of consecutive .notdef glyphs, as index ranges.
+    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut i = 0;
+    while i < run.glyphs.len() {
+        if run.glyphs[i].glyph_id == 0 {
+            let start = i;
+            while i < run.glyphs.len() && run.glyphs[i].glyph_id == 0 {
+                i += 1;
+            }
+            spans.push(start..i);
+        } else {
+            i += 1;
         }
+    }
+    if spans.is_empty() {
+        return;
+    }
 
-        // Find the character that produced this .notdef
-        let byte_offset = glyph.cluster as usize;
-        let ch = match text.get(byte_offset..).and_then(|s| s.chars().next()) {
-            Some(c) => c,
-            None => continue,
+    // Splice from the back so earlier ranges stay valid as lengths change.
+    for span in spans.into_iter().rev() {
+        let Some((byte_start, byte_end)) = notdef_char_range(&run.glyphs, &span, text) else {
+            continue;
+        };
+        let Some(slice) = text.get(byte_start..byte_end) else {
+            continue;
+        };
+        let Some(first_char) = slice.chars().next() else {
+            continue;
         };
 
-        // Find a fallback font that has this character
-        let fallback_id = match find_fallback_font(registry, ch, primary.font_face_id) {
-            Some(id) => id,
-            None => continue, // no fallback available -leave as .notdef
+        let Some(fallback_id) = find_fallback_font(registry, first_char, primary.font_face_id)
+        else {
+            continue; // no fallback available — leave the span as .notdef
+        };
+        let Some(fallback_entry) = registry.get(fallback_id) else {
+            continue;
         };
 
-        let fallback_entry = match registry.get(fallback_id) {
-            Some(e) => e,
-            None => continue,
-        };
-
-        // Shape just this character with the fallback font
         let fallback_resolved = ResolvedFont {
             font_face_id: fallback_id,
             size_px: primary.size_px,
@@ -137,29 +162,69 @@ fn apply_glyph_fallback(
             weight: primary.weight,
         };
 
-        let char_str = &text[byte_offset..byte_offset + ch.len_utf8()];
-        if let Some(fallback_run) = shape_text_directed(
+        let Some(fallback_run) = shape_text_directed(
             registry,
             &fallback_resolved,
-            char_str,
-            text_offset + byte_offset,
-            TextDirection::Auto,
+            slice,
+            text_offset + byte_start,
+            run.direction,
             features,
-        ) {
-            // Replace the .notdef glyph with the fallback glyph(s)
-            if let Some(fb_glyph) = fallback_run.glyphs.first() {
-                glyph.glyph_id = fb_glyph.glyph_id;
-                glyph.x_advance = fb_glyph.x_advance;
-                glyph.y_advance = fb_glyph.y_advance;
-                glyph.x_offset = fb_glyph.x_offset;
-                glyph.y_offset = fb_glyph.y_offset;
-                glyph.font_face_id = fallback_id;
-            }
+        ) else {
+            continue;
+        };
+        if fallback_run.glyphs.is_empty() {
+            continue;
         }
+
+        // Clusters come back local to `slice`; lift them into `text` space,
+        // which is what the rest of the pipeline expects of this run.
+        let replacement: Vec<ShapedGlyph> = fallback_run
+            .glyphs
+            .into_iter()
+            .map(|mut g| {
+                g.cluster += byte_start as u32;
+                g.font_face_id = fallback_id;
+                g
+            })
+            .collect();
+
+        run.glyphs.splice(span, replacement);
     }
 
-    // Recompute total advance
     run.advance_width = run.glyphs.iter().map(|g| g.x_advance).sum();
+}
+
+/// The byte range of `text` that a span of consecutive .notdef glyphs covers.
+///
+/// Glyphs sit in visual order, so clusters ascend across an LTR run and
+/// descend across an RTL one. Taking the min and max over the span rather
+/// than its first and last glyph keeps this direction-agnostic.
+///
+/// The span's end is the nearest cluster *after* it among the glyphs outside
+/// it — the start of whatever the primary font did manage to shape — or the
+/// end of the text when the span runs to the edge.
+fn notdef_char_range(
+    glyphs: &[ShapedGlyph],
+    span: &std::ops::Range<usize>,
+    text: &str,
+) -> Option<(usize, usize)> {
+    let inside = glyphs.get(span.clone())?;
+    let start = inside.iter().map(|g| g.cluster as usize).min()?;
+    let last = inside.iter().map(|g| g.cluster as usize).max()?;
+
+    let end = glyphs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !span.contains(i))
+        .map(|(_, g)| g.cluster as usize)
+        .filter(|&c| c > last)
+        .min()
+        .unwrap_or(text.len());
+
+    if start >= end || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+        return None;
+    }
+    Some((start, end))
 }
 
 /// Shape text with an explicit direction.
