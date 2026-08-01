@@ -267,3 +267,105 @@ fn overlapping_spans_last_wins() {
         "non-overlapping prefix stays red"
     );
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Cross-run tiling
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// A block of two differently-formatted fragments, so one background span has to cover two
+/// separate `PositionedRun`s.
+fn bold_then_regular(text_a: &str, text_b: &str) -> text_typeset::layout::block::BlockLayoutParams {
+    use text_typeset::layout::block::FragmentParams;
+    use text_typeset::layout::paragraph::Alignment;
+    use text_typeset::{UnderlineStyle, VerticalAlignment};
+    let frag = |text: &str, offset: usize, bold: Option<bool>| FragmentParams {
+        text: text.to_string(),
+        offset,
+        length: text.len(),
+        font_family: None,
+        font_weight: None,
+        font_bold: bold,
+        font_italic: None,
+        font_point_size: None,
+        underline_style: UnderlineStyle::None,
+        overline: false,
+        strikeout: false,
+        is_link: false,
+        letter_spacing: 0.0,
+        word_spacing: 0.0,
+        foreground_color: None,
+        underline_color: None,
+        background_color: None,
+        anchor_href: None,
+        tooltip: None,
+        vertical_alignment: VerticalAlignment::Normal,
+        image_name: None,
+        image_width: 0.0,
+        image_height: 0.0,
+        features: Vec::new(),
+    };
+    let whole = format!("{text_a}{text_b}");
+    let mut b = make_block(1, &whole);
+    b.fragments = vec![
+        frag(text_a, 0, Some(true)),
+        frag(text_b, text_a.len(), None),
+    ];
+    b.alignment = Alignment::Left;
+    b
+}
+
+/// **The band must not show seams.** A highlight spanning a formatting boundary emits one
+/// `TextBackground` rect per run, so a sentence that crosses a bold word is drawn as several
+/// abutting rectangles. If they left a gap — or overlapped — the band would show a hairline
+/// down the middle of a word.
+///
+/// This is the invariant that makes coalescing the rects unnecessary. Should it ever fail, that
+/// is the signal to merge same-colour rects per line in `render/decoration.rs`, and not before.
+#[test]
+fn a_background_span_tiles_seamlessly_across_a_run_boundary() {
+    let mut ts = make_typesetter();
+    ts.layout_blocks(vec![bold_then_regular("Hello ", "world")]);
+    let base = positions(&mut ts);
+
+    ts.flow.apply_block_paint_spans(
+        1,
+        &[PaintSpan {
+            char_start: 0,
+            char_end: 11,
+            background_color: Some(GREEN),
+            ..Default::default()
+        }],
+    );
+
+    let frame = ts.render();
+    let mut bands: Vec<[f32; 4]> = frame
+        .decorations
+        .iter()
+        .filter(|d| d.kind == DecorationKind::TextBackground)
+        .map(|d| d.rect)
+        .collect();
+    assert!(
+        bands.len() >= 2,
+        "the two fragments must produce separate rects for this test to mean anything; got {}",
+        bands.len()
+    );
+
+    bands.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
+    for pair in bands.windows(2) {
+        let (left, right) = (pair[0], pair[1]);
+        // Same visual line: identical top and height, or the band would step.
+        assert!(
+            (left[1] - right[1]).abs() < 1e-3 && (left[3] - right[3]).abs() < 1e-3,
+            "rects on one line must share their vertical band: {left:?} vs {right:?}"
+        );
+        // No gap, no overlap.
+        let seam = left[0] + left[2] - right[0];
+        assert!(
+            seam.abs() < 1e-3,
+            "adjacent background rects must tile exactly; seam of {seam} between {left:?} and {right:?}"
+        );
+    }
+
+    // …and covering two runs still reshapes nothing.
+    assert_eq!(positions(&mut ts), base);
+}
