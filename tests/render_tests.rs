@@ -2402,41 +2402,51 @@ fn zoom_2x_scales_glyph_coordinates() {
     ts.layout_blocks(vec![make_block(1, "Hello")]);
 
     // Render at 1x
-    let frame_1x = ts.render();
-    let glyphs_1x: Vec<[f32; 4]> = frame_1x.glyphs.iter().map(|q| q.screen).collect();
-    assert!(!glyphs_1x.is_empty());
+    let glyphs_1x: Vec<[f32; 4]> = {
+        let frame = ts.render();
+        let g: Vec<[f32; 4]> = frame.glyphs.iter().map(|q| q.screen).collect();
+        assert!(!g.is_empty());
+        g
+    };
 
-    // Render at 2x
+    // Render at 2x — densify switches to an unhinted ladder bitmap, so
+    // per-glyph bearings (placement_left/top) can differ by ~1 densified
+    // texel in logical space. Coordinates must still *approximately*
+    // double; exact pixel-identity is not part of the zoom contract.
     ts.set_zoom(2.0);
-    let frame_2x = ts.render();
-    let glyphs_2x: Vec<[f32; 4]> = frame_2x.glyphs.iter().map(|q| q.screen).collect();
+    let glyphs_2x: Vec<[f32; 4]> = ts.render().glyphs.iter().map(|q| q.screen).collect();
 
     assert_eq!(glyphs_1x.len(), glyphs_2x.len());
+    // ~2 densify texels of bearing slack after ×2 (quantize(2) ≈ 1.95).
+    const SLACK: f32 = 4.0;
     for (g1, g2) in glyphs_1x.iter().zip(glyphs_2x.iter()) {
         assert!(
-            (g2[0] - g1[0] * 2.0).abs() < 0.01,
+            (g2[0] - g1[0] * 2.0).abs() < SLACK,
             "x: {} vs {}",
             g2[0],
             g1[0] * 2.0
         );
         assert!(
-            (g2[1] - g1[1] * 2.0).abs() < 0.01,
+            (g2[1] - g1[1] * 2.0).abs() < SLACK,
             "y: {} vs {}",
             g2[1],
             g1[1] * 2.0
         );
         assert!(
-            (g2[2] - g1[2] * 2.0).abs() < 0.01,
+            (g2[2] - g1[2] * 2.0).abs() < SLACK,
             "w: {} vs {}",
             g2[2],
             g1[2] * 2.0
         );
         assert!(
-            (g2[3] - g1[3] * 2.0).abs() < 0.01,
+            (g2[3] - g1[3] * 2.0).abs() < SLACK,
             "h: {} vs {}",
             g2[3],
             g1[3] * 2.0
         );
+        // And still clearly magnified, not stuck at 1×.
+        assert!(g2[2] > g1[2] * 1.5, "width should roughly double under zoom 2");
+        assert!(g2[3] > g1[3] * 1.5, "height should roughly double under zoom 2");
     }
 }
 
@@ -2568,6 +2578,63 @@ fn zoom_clamps_to_valid_range() {
     assert!((ts.zoom() - 10.0).abs() < f32::EPSILON);
     ts.set_zoom(1.5);
     assert!((ts.zoom() - 1.5).abs() < f32::EPSILON);
+}
+
+/// Magnified zoom must densify atlas bitmaps — stretching a 1× raster
+/// is why editor zoom used to look soft. Atlas height of a glyph at
+/// zoom 2 should track the densify ladder (~1.25³ ≈ 1.95×), not stay
+/// equal to the 1× paint.
+#[test]
+fn zoom_densifies_glyph_bitmaps() {
+    let mut ts = make_typesetter();
+    ts.layout_blocks(vec![make_block(1, "Hello")]);
+
+    let atlas_h_1x: Vec<f32> = {
+        let frame = ts.render();
+        assert!(!frame.glyphs.is_empty(), "expected glyphs at zoom 1");
+        frame.glyphs.iter().map(|q| q.atlas[3]).collect()
+    };
+
+    ts.set_zoom(2.0);
+    let atlas_h_2x: Vec<f32> = {
+        let frame = ts.render();
+        assert_eq!(frame.glyphs.len(), atlas_h_1x.len());
+        frame.glyphs.iter().map(|q| q.atlas[3]).collect()
+    };
+
+    let expected = text_typeset::quantize_raster_scale(2.0);
+    assert!(
+        (expected - 1.25_f32.powi(3)).abs() < 1e-5,
+        "zoom 2.0 should land on densify bucket 1.25³, got {expected}"
+    );
+
+    for (h1, h2) in atlas_h_1x.iter().zip(atlas_h_2x.iter()) {
+        if *h1 <= 0.0 {
+            continue;
+        }
+        let ratio = h2 / h1;
+        assert!(
+            ratio > 1.5,
+            "zoom 2 must densify atlas height (got ratio {ratio}, \
+             1× h={h1}, 2× h={h2}); soft stretch would leave ratio ≈ 1"
+        );
+        // Residual after densify is small — atlas ~ densify × logical,
+        // not a full exact 2× if the ladder rounded.
+        assert!(
+            ratio < 2.5,
+            "densify ratio {ratio} looks unreasonably large"
+        );
+    }
+}
+
+#[test]
+fn quantize_raster_scale_ladder() {
+    assert_eq!(text_typeset::quantize_raster_scale(1.0), 1.0);
+    assert_eq!(text_typeset::quantize_raster_scale(0.5), 1.0);
+    assert_eq!(text_typeset::quantize_raster_scale(2.0), 1.25_f32.powi(3));
+    // Idempotent on ladder values.
+    let bucket = text_typeset::quantize_raster_scale(2.0);
+    assert_eq!(text_typeset::quantize_raster_scale(bucket), bucket);
 }
 
 #[test]

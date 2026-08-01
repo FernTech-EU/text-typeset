@@ -362,15 +362,26 @@ impl DocumentFlow {
 
     // ── Zoom ────────────────────────────────────────────────────
 
-    /// Set the display zoom level (PDF-style, no reflow).
+    /// Set the display zoom level (`1.0` = 100 %).
     ///
-    /// Zoom is a pure display transform: layout stays at base size
-    /// and all screen-space output (glyph quads, decorations, caret
-    /// rects) is scaled by this factor. Hit-test inputs are
-    /// inversely scaled.
+    /// Zoom scales screen-space output (glyph quads, decorations, caret
+    /// rects) after layout. Font metrics at layout stay at base size;
+    /// hit-test inputs are inversely scaled.
     ///
-    /// For browser-style zoom that reflows text, combine with
-    /// `set_content_width(viewport_width / zoom)`.
+    /// **Wrap / reflow.** In [`ContentWidthMode::Auto`] (the editor
+    /// default) layout width is `viewport_width / zoom`, so text
+    /// re-wraps when zoom changes — browser-style zoom. In
+    /// [`ContentWidthMode::Fixed`], wrap width is independent of zoom
+    /// (page magnify without reflow).
+    ///
+    /// **Sharpness.** Glyph bitmaps densify under zoom: the next
+    /// [`render`](Self::render) rasterizes at
+    /// `ambient_raster_scale × quantize(zoom)` physical density so
+    /// magnified text stays crisp instead of stretching a 1× atlas
+    /// entry. Zoom-out (`< 1`) keeps density ≥ 1 and relies on linear
+    /// minification. Continuous zoom is quantized onto a short ladder
+    /// (same contract as scene transform densification) so the atlas
+    /// does not grow a new size per frame.
     ///
     /// Clamped to `0.1..=10.0`. Default is `1.0`.
     pub fn set_zoom(&mut self, zoom: f32) {
@@ -380,6 +391,15 @@ impl DocumentFlow {
     /// Current display zoom level.
     pub fn zoom(&self) -> f32 {
         self.zoom
+    }
+
+    /// Raster densification used on the next paint: ambient
+    /// [`raster_scale`](Self::raster_scale) × zoom, quantized onto the
+    /// densify ladder (see [`quantize_raster_scale`]). Layout and
+    /// pre-zoom `screen` rects stay logical; only the atlas bitmap
+    /// density changes.
+    fn densify_raster_scale(&self) -> f32 {
+        quantize_raster_scale(self.raster_scale * self.zoom)
     }
 
     // ── Font scale (logical text magnification) ──────────────────
@@ -402,17 +422,16 @@ impl DocumentFlow {
         self.font_scale
     }
 
-    /// Set the raster densification scale for content drawn under a
-    /// scale transform (a zoomed scene viewport).
+    /// Set the ambient raster densification scale for content drawn
+    /// under an *external* scale transform (a zoomed scene viewport).
     ///
-    /// Orthogonal to [`set_zoom`](Self::set_zoom): zoom multiplies the
-    /// emitted screen coordinates, `raster_scale` only changes the
-    /// physical ppem glyphs are rasterized at — layout, metrics, and
-    /// `screen` rects are identical at every raster scale, so no
-    /// relayout is needed after changing it. The next [`render`](Self::render)
-    /// rasterizes missing glyphs at the new density;
-    /// old-density entries age out of the atlas via the normal LRU.
-    /// Scaled rasters (`!= 1.0`) are unhinted.
+    /// Combined with [`set_zoom`](Self::set_zoom) at paint time: glyphs
+    /// densify at `quantize(raster_scale × zoom)`. Layout, metrics, and
+    /// pre-zoom `screen` rects stay logical, so no relayout is needed
+    /// after changing ambient densification alone. The next
+    /// [`render`](Self::render) rasterizes missing glyphs at the new
+    /// density; old-density entries age out of the atlas via the normal
+    /// LRU. Scaled rasters (`!= 1.0`) are unhinted.
     ///
     /// Clamped to `0.1..=16.0`. Default is `1.0`.
     pub fn set_raster_scale(&mut self, raster_scale: f32) {
@@ -816,6 +835,7 @@ impl DocumentFlow {
     pub fn render(&mut self, service: &mut TextFontService) -> &RenderFrame {
         let effective_vw = self.viewport_width / self.zoom;
         let effective_vh = self.viewport_height / self.zoom;
+        let densify = self.densify_raster_scale();
         crate::render::frame::build_render_frame(
             &self.flow_layout,
             &service.font_registry,
@@ -830,7 +850,7 @@ impl DocumentFlow {
             self.cursor_color,
             self.selection_color,
             self.text_color,
-            self.raster_scale,
+            densify,
             &mut self.render_frame,
             &mut service.eviction_epoch,
         );
@@ -910,6 +930,7 @@ impl DocumentFlow {
 
         let effective_vw = self.viewport_width / self.zoom;
         let effective_vh = self.viewport_height / self.zoom;
+        let densify = self.densify_raster_scale();
         let scale_factor = service.scale_factor;
         let mut new_glyphs = Vec::new();
         let mut new_images = Vec::new();
@@ -929,7 +950,7 @@ impl DocumentFlow {
                 self.render_window,
                 self.text_color,
                 scale_factor,
-                self.raster_scale,
+                densify,
                 &mut tmp,
                 &mut new_keys,
                 &mut service.eviction_epoch,
@@ -2460,6 +2481,35 @@ fn rasterize_glyph_quad(
         });
         glyph_keys.push(cache_key);
     }
+}
+
+/// Quantize an accumulated densification scale onto a geometric ladder of
+/// 1.25ⁿ steps, `n ∈ [0, 6]` (so the value lands in `[1.0, ~3.81]`), for
+/// glyph raster densification under zoom / external scale transforms.
+///
+/// The ladder bounds the number of distinct atlas entries a continuous
+/// zoom gesture can create (7 buckets). The bucket value is derived from
+/// an integer index, so the same input always yields the bit-identical
+/// f32 — cache keys stay stable across frames — and the function is
+/// idempotent (a bucket value maps to itself). Between buckets the
+/// residual GPU scaling is at most ~12%, invisible under the glyph
+/// atlas's linear filtering. Scales below 1 clamp to 1: zoomed-out text
+/// relies on linear minification rather than rasterizing below logical
+/// size.
+///
+/// Kept in lockstep with `bastyde_canvas::quantize_raster_scale` (scene
+/// transform densification uses the same ladder).
+pub fn quantize_raster_scale(scale: f32) -> f32 {
+    if !scale.is_finite() || scale <= 1.0 {
+        return 1.0;
+    }
+    const STEP: f32 = 1.25;
+    /// 1.25⁶ ≈ 3.81 — the densest raster bucket. Deep zoom beyond it
+    /// rides linear magnification; an unbounded ladder would explode
+    /// atlas area quadratically.
+    const MAX_BUCKET: i32 = 6;
+    let bucket = ((scale.ln() / STEP.ln()).round() as i32).clamp(0, MAX_BUCKET);
+    STEP.powi(bucket)
 }
 
 /// Scale all screen-space coordinates in a RenderFrame by `zoom`.

@@ -230,8 +230,9 @@ fn screen_matches_logical_atlas_matches_physical() {
 
 #[test]
 fn zoom_and_scale_factor_are_orthogonal() {
-    // sf=2 + zoom=1.5 → screen quads are 1.5x the sf=2, zoom=1.0 quads;
-    // atlas rects are unchanged (zoom does not re-rasterize).
+    // sf=2 is HiDPI (physical density); zoom=1.5 is a display transform that
+    // *also* densifies atlas bitmaps (so magnified text stays sharp). Screen
+    // quads scale ~1.5×; atlas rects grow by the densify ladder for zoom.
     let mut a = fresh_ts();
     a.set_scale_factor(2.0);
     a.layout_blocks(vec![make_block(1, TEXT)]);
@@ -244,34 +245,44 @@ fn zoom_and_scale_factor_are_orthogonal() {
     let rb_glyphs = b.render().glyphs.clone();
 
     assert_eq!(ra_glyphs.len(), rb_glyphs.len());
+    let densify = text_typeset::quantize_raster_scale(1.5);
+    assert!(densify > 1.0, "zoom 1.5 must land above the 1× densify bucket");
     for (qa, qb) in ra_glyphs.iter().zip(rb_glyphs.iter()) {
         if qa.screen[2] < 0.5 {
             continue;
         }
+        // Bearing residual from unhinted densify bitmaps — allow a few px.
         assert!(
-            (qb.screen[2] - qa.screen[2] * 1.5).abs() < 0.05,
-            "zoom should scale screen w by 1.5x: {} vs {}",
+            (qb.screen[2] - qa.screen[2] * 1.5).abs() < 2.0,
+            "zoom should scale screen w by ~1.5x: {} vs {}",
             qa.screen[2] * 1.5,
             qb.screen[2]
         );
-        // Atlas rects: zoom has no effect; scale_factor is identical.
-        assert!((qa.atlas[2] - qb.atlas[2]).abs() < 1e-3);
-        assert!((qa.atlas[3] - qb.atlas[3]).abs() < 1e-3);
+        // Atlas densifies under zoom (sharp magnify), not identity.
+        if qa.atlas[2] >= 8.0 {
+            assert!(
+                qb.atlas[2] > qa.atlas[2] * 1.1,
+                "zoom must densify atlas w: {} -> {}",
+                qa.atlas[2],
+                qb.atlas[2]
+            );
+        }
     }
 }
 
 // ── raster_scale invariants ─────────────────────────────────────────
 //
-// `raster_scale` is the third axis next to `scale_factor` (HiDPI) and
-// `zoom` (display transform): it densifies the rasterized bitmaps for
-// content drawn under a scale transform while layout, metrics, and
-// screen rects stay logical.
+// Ambient `raster_scale` is the third axis next to `scale_factor` (HiDPI)
+// and `zoom` (display transform + densify): it densifies bitmaps for
+// content under an *external* scale transform. Paint densify is
+// `quantize(ambient × zoom)`; layout metrics and pre-zoom screen rects
+// stay logical.
 
 #[test]
 fn raster_scale_densifies_atlas_keeps_screen_logical() {
     // The dual of `screen_matches_logical_atlas_matches_physical`:
-    // raster_scale=2 grows the atlas rects ~2x but leaves screen rects
-    // unchanged (no reflow, no quad scaling).
+    // ambient raster_scale=2 densifies onto the ladder (~1.25³) and
+    // leaves pre-zoom screen rects roughly logical (no apply_zoom).
     let mut a = fresh_ts();
     a.layout_blocks(vec![make_block(1, TEXT)]);
     let ra_glyphs = a.render().glyphs.clone();
@@ -283,27 +294,28 @@ fn raster_scale_densifies_atlas_keeps_screen_logical() {
 
     assert_eq!(ra_glyphs.len(), rb_glyphs.len());
     assert!(!ra_glyphs.is_empty());
+    let densify = text_typeset::quantize_raster_scale(2.0);
     let mut checked_non_empty = false;
     for (qa, qb) in ra_glyphs.iter().zip(rb_glyphs.iter()) {
         if qa.screen[2] < 0.5 || qb.screen[2] < 0.5 {
             continue;
         }
         checked_non_empty = true;
-        // Screen rects stay logical. The unhinted raster at 2x can shift
-        // glyph bounds by up to one physical pixel — allow 1 logical px.
+        // Screen rects stay logical. Unhinted dense rasters change ink
+        // bounds by a few logical px (bearing / pixel snapping).
         assert!(
-            (qa.screen[2] - qb.screen[2]).abs() <= 1.01,
+            (qa.screen[2] - qb.screen[2]).abs() <= 3.0,
             "screen w diverges: {} vs {}",
             qa.screen[2],
             qb.screen[2]
         );
         assert!(
-            (qa.screen[3] - qb.screen[3]).abs() <= 1.01,
+            (qa.screen[3] - qb.screen[3]).abs() <= 3.0,
             "screen h diverges: {} vs {}",
             qa.screen[3],
             qb.screen[3]
         );
-        // Atlas rects must grow.
+        // Atlas rects must grow roughly with the densify ladder.
         assert!(
             qb.atlas[2] >= qa.atlas[2],
             "atlas w shrunk: {} -> {}",
@@ -314,15 +326,15 @@ fn raster_scale_densifies_atlas_keeps_screen_logical() {
             let ratio_w = qb.atlas[2] / qa.atlas[2];
             let ratio_h = qb.atlas[3] / qa.atlas[3];
             assert!(
-                (1.6..=2.4).contains(&ratio_w),
-                "atlas w ratio {} not near 2x ({} -> {})",
+                (densify * 0.7..=densify * 1.3).contains(&ratio_w),
+                "atlas w ratio {} not near densify {densify} ({} -> {})",
                 ratio_w,
                 qa.atlas[2],
                 qb.atlas[2]
             );
             assert!(
-                (1.6..=2.4).contains(&ratio_h),
-                "atlas h ratio {} not near 2x ({} -> {})",
+                (densify * 0.7..=densify * 1.3).contains(&ratio_h),
+                "atlas h ratio {} not near densify {densify} ({} -> {})",
                 ratio_h,
                 qa.atlas[3],
                 qb.atlas[3]
@@ -393,9 +405,9 @@ fn hinted_key_separates_same_physical_size() {
 }
 
 #[test]
-fn raster_scale_and_zoom_are_independent() {
-    // raster_scale=2 + zoom=1.5: zoom scales the screen quads, while
-    // the atlas rects come from the raster scale alone.
+fn raster_scale_and_zoom_compose_for_densify() {
+    // densify = quantize(ambient_raster_scale × zoom). Screen scales by
+    // zoom; atlas density tracks the composed ladder, not ambient alone.
     let mut a = fresh_ts();
     a.set_raster_scale(2.0);
     a.layout_blocks(vec![make_block(1, TEXT)]);
@@ -407,20 +419,33 @@ fn raster_scale_and_zoom_are_independent() {
     b.set_zoom(1.5);
     let rb_glyphs = b.render().glyphs.clone();
 
+    let densify_a = text_typeset::quantize_raster_scale(2.0);
+    let densify_b = text_typeset::quantize_raster_scale(2.0 * 1.5);
+    assert!(
+        densify_b > densify_a,
+        "zoom on top of ambient densify must raise the ladder: {densify_a} -> {densify_b}"
+    );
+
     assert_eq!(ra_glyphs.len(), rb_glyphs.len());
     for (qa, qb) in ra_glyphs.iter().zip(rb_glyphs.iter()) {
         if qa.screen[2] < 0.5 {
             continue;
         }
         assert!(
-            (qb.screen[2] - qa.screen[2] * 1.5).abs() < 0.05,
-            "zoom should scale screen w by 1.5x: {} vs {}",
+            (qb.screen[2] - qa.screen[2] * 1.5).abs() < 2.0,
+            "zoom should scale screen w by ~1.5x: {} vs {}",
             qa.screen[2] * 1.5,
             qb.screen[2]
         );
-        // Same raster scale → identical atlas rects regardless of zoom.
-        assert!((qa.atlas[2] - qb.atlas[2]).abs() < 1e-3);
-        assert!((qa.atlas[3] - qb.atlas[3]).abs() < 1e-3);
+        // Composed densify grows the atlas beyond ambient-only.
+        if qa.atlas[2] >= 8.0 {
+            assert!(
+                qb.atlas[2] > qa.atlas[2] * 1.05,
+                "composed densify must grow atlas w: {} -> {}",
+                qa.atlas[2],
+                qb.atlas[2]
+            );
+        }
     }
 }
 

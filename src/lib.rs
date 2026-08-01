@@ -102,7 +102,7 @@ pub use types::{
     TextFormat, UnderlineStyle, VerticalAlignment,
 };
 
-pub use document_flow::{ContentWidthMode, DocumentFlow, RelayoutError};
+pub use document_flow::{ContentWidthMode, DocumentFlow, RelayoutError, quantize_raster_scale};
 pub use font::{
     FontFamilyInfo, SharedFontData, WritingSystem, WritingSystemIndexBuilder, WritingSystemSet,
 };
