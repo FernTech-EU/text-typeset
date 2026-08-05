@@ -136,6 +136,21 @@ pub struct FragmentParams {
     pub image_width: f32,
     /// Image height in pixels. Only meaningful when image_name is Some.
     pub image_height: f32,
+    /// If Some, this fragment is a footnote reference and this is the marker
+    /// to draw at its position — a number, usually, but the host decides.
+    ///
+    /// The fragment still occupies exactly the **one** `U+FFFC` character its
+    /// `text` holds, however many glyphs the marker shapes to. That mismatch is
+    /// the whole point and the whole hazard: the marker is *presentation*, and
+    /// the document must not grow a character because a footnote reached two
+    /// digits. So the marker is shaped on its own and every resulting glyph is
+    /// pinned to the sentinel's cluster, which is what stops the caret landing
+    /// between the `1` and the `2` of note twelve.
+    ///
+    /// Distinct from [`Self::image_name`] rather than folded in with it: an
+    /// image reserves a box of a size the host measured, a marker reserves
+    /// whatever its own glyphs advance to, and only the latter needs a font.
+    pub footnote_marker: Option<String>,
     /// Discretionary OpenType features to toggle during shaping. Empty =
     /// font defaults. See [`crate::types::FontFeature`].
     pub features: Vec<crate::types::FontFeature>,
@@ -277,6 +292,69 @@ pub fn layout_block(
             }
 
             let features = to_harfrust_features(&frag.features);
+
+            // A footnote reference: shape the *marker* and pin it to the
+            // sentinel.
+            //
+            // The fragment's own text is one `U+FFFC`, three bytes wide and one
+            // character long; the marker is whatever the host wants drawn there.
+            // Shaping the marker through the ordinary path below is not an
+            // option — that path slices `frag.text` by byte range, so a marker
+            // longer than the sentinel would read past it, and a marker shorter
+            // than it would leave a coverage gap. Shaping it standalone and
+            // then overwriting the run's own coordinates is the same graft
+            // `append_hyphen` performs for a hyphen that is likewise not in the
+            // text.
+            //
+            // Every glyph is collapsed onto the sentinel's cluster. Clusters are
+            // what hit-testing, caret movement and line breaking all read, so
+            // one shared value makes the marker atomic in all three at once: a
+            // click anywhere in it resolves to the sentinel, the caret cannot
+            // stop inside it, and a line cannot break within it.
+            //
+            // Deliberately no `image_height`: that field is what makes
+            // `break_into_lines` inflate a line to fit, and an inflated line is
+            // then excluded from the interline multiplier. A marker is smaller
+            // than the text it rides on and must stay an ordinary line, or a
+            // footnote would quietly change the leading of the paragraph
+            // holding it.
+            if let Some(marker) = frag.footnote_marker.as_deref() {
+                let (direction, level) = fragment_bidi_slices(&bidi, frag)
+                    .first()
+                    .map(|(_, d, l)| (*d, *l))
+                    .unwrap_or((TextDirection::LeftToRight, 0));
+
+                if let Some(mut run) =
+                    shape_text_with_fallback(registry, &resolved, marker, 0, direction, &features)
+                {
+                    // Cluster 0, not `frag.offset`: clusters are **run-local**
+                    // here and `flatten_runs` lifts them by `text_range.start`
+                    // on the way out. Pinning them to the absolute offset
+                    // instead double-counts it, which puts every stop past the
+                    // end of the run — the caret after a footnote then lands
+                    // wherever the *next* run happens to start, and a marker of
+                    // two digits measures the same as one of one. The image
+                    // branch above uses the same `cluster: 0` for the same
+                    // reason.
+                    for glyph in &mut run.glyphs {
+                        glyph.cluster = 0;
+                    }
+                    run.text_range = frag.offset..frag.offset + frag.text.len();
+                    run.bidi_level = level;
+                    run.underline_style = frag.underline_style;
+                    run.overline = frag.overline;
+                    run.strikeout = frag.strikeout;
+                    run.is_link = frag.is_link;
+                    run.foreground_color = frag.foreground_color;
+                    run.underline_color = frag.underline_color;
+                    run.background_color = frag.background_color;
+                    run.anchor_href = frag.anchor_href.clone();
+                    run.tooltip = frag.tooltip.clone();
+                    run.vertical_alignment = frag.vertical_alignment;
+                    shaped_runs.push(run);
+                }
+                continue;
+            }
 
             // Shape each directional slice of the fragment separately. A
             // fragment is a *formatting* span (one bold/italic/font run),

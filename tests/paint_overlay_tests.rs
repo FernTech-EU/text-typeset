@@ -302,6 +302,7 @@ fn bold_then_regular(text_a: &str, text_b: &str) -> text_typeset::layout::block:
         image_name: None,
         image_width: 0.0,
         image_height: 0.0,
+        footnote_marker: None,
         features: Vec::new(),
     };
     let whole = format!("{text_a}{text_b}");

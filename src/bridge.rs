@@ -176,6 +176,7 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
             let char_offset = match f {
                 FragmentContent::Text { offset, .. } => *offset,
                 FragmentContent::Image { offset, .. } => *offset,
+                FragmentContent::FootnoteReference { offset, .. } => *offset,
             };
             let byte_offset = char_to_byte
                 .get(char_offset)
@@ -361,9 +362,41 @@ fn convert_fragment(
                 image_name: None,
                 image_width: 0.0,
                 image_height: 0.0,
+                footnote_marker: None,
                 features: Vec::new(),
             }
         }
+        // A footnote reference: one sentinel character in the block's text, and
+        // the marker painted over it. `text` stays the sentinel so the fragment's
+        // bytes still match the block string the layout indexes against; the
+        // marker travels separately and is shaped on its own.
+        FragmentContent::FootnoteReference { marker, format, .. } => FragmentParams {
+            text: "\u{FFFC}".to_string(),
+            offset: byte_offset,
+            length: 1,
+            font_family: format.font_family.clone(),
+            font_weight: format.font_weight,
+            font_bold: format.font_bold,
+            font_italic: format.font_italic,
+            font_point_size: format.font_point_size,
+            underline_style: convert_underline_style(format),
+            overline: format.font_overline.unwrap_or(false),
+            strikeout: format.font_strikeout.unwrap_or(false),
+            is_link: format.is_anchor.unwrap_or(false),
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+            foreground_color: format.foreground_color.as_ref().map(convert_color),
+            underline_color: format.underline_color.as_ref().map(convert_color),
+            background_color: format.background_color.as_ref().map(convert_color),
+            anchor_href: format.anchor_href.clone(),
+            tooltip: format.tooltip.clone(),
+            vertical_alignment: convert_vertical_alignment(format),
+            image_name: None,
+            image_width: 0.0,
+            image_height: 0.0,
+            footnote_marker: Some(marker.clone()),
+            features: Vec::new(),
+        },
         FragmentContent::Image {
             name,
             width,
@@ -395,6 +428,7 @@ fn convert_fragment(
             image_name: Some(name.clone()),
             image_width: *width as f32,
             image_height: *height as f32,
+            footnote_marker: None,
             features: Vec::new(),
         },
     }
