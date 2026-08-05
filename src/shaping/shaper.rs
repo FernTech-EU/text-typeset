@@ -558,7 +558,7 @@ pub fn analyze_paragraph(text: &str, base: TextDirection) -> BidiParagraph {
         .map(|&(start, _)| start)
         .chain(std::iter::once(text.len()));
 
-    let mut runs: Vec<BidiRun> = starts
+    let runs: Vec<BidiRun> = starts
         .iter()
         .zip(ends)
         .map(|(&(start, level), end)| BidiRun {
