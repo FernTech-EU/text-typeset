@@ -2302,6 +2302,75 @@ fn tall_image_expands_line_height() {
     );
 }
 
+/// Regression test: an interline-spacing multiplier must stretch only the
+/// font's own line box, never the extra space an inline image pushed the
+/// line to. Before the fix, `line.line_height` (already inflated to the
+/// image's height) was multiplied wholesale, so a 1.5x interline setting
+/// turned a 200px image into ~100px of blank space below it — the "huge
+/// gap after an inline image" bug report.
+#[test]
+fn line_height_multiplier_does_not_scale_with_image_height() {
+    let mut ts_1x = make_typesetter();
+    let mut block_1x = make_image_block(1, "tall.png", 50.0, 200.0);
+    block_1x.line_height_multiplier = None; // 1.0x
+    ts_1x.layout_blocks(vec![block_1x]);
+    let height_1x = ts_1x.content_height();
+
+    let mut ts_1_5x = make_typesetter();
+    let mut block_1_5x = make_image_block(1, "tall.png", 50.0, 200.0);
+    block_1_5x.line_height_multiplier = Some(1.5);
+    ts_1_5x.layout_blocks(vec![block_1_5x]);
+    let height_1_5x = ts_1_5x.content_height();
+
+    let growth = height_1_5x - height_1x;
+    assert!(
+        growth < 20.0,
+        "a 1.5x interline setting must not add a fraction of the image's \
+         height ({}px) as extra space below it; content height grew by \
+         {} going from 1.0x to 1.5x",
+        200.0,
+        growth
+    );
+}
+
+/// A one-line, image-free block, built off `make_image_block` so the two share
+/// every field but the image.
+fn plain_line_block(id: usize) -> BlockLayoutParams {
+    let mut b = make_image_block(id, "unused.png", 0.0, 0.0);
+    b.text = "One line of prose.".to_string();
+    b.fragments[0].text = b.text.clone();
+    b.fragments[0].length = b.text.len();
+    b.fragments[0].image_name = None;
+    b.fragments[0].image_width = 0.0;
+    b.fragments[0].image_height = 0.0;
+    b
+}
+
+/// The other direction, which the obvious fix silently breaks: a multiplier
+/// *below* 1.0 must still compress an ordinary text line. Sub-1.0 line heights
+/// are not exotic — they arrive unclamped from imported HTML (`line-height:
+/// 0.8`) and from djot's `{line_height=800}`, which is exactly the content a
+/// Word or Google Docs paste carries.
+#[test]
+fn a_multiplier_below_one_still_compresses_a_text_line() {
+    let mut tight = make_typesetter();
+    let mut a = plain_line_block(1);
+    a.line_height_multiplier = Some(0.8);
+    tight.layout_blocks(vec![a]);
+
+    let mut normal = make_typesetter();
+    let mut b = plain_line_block(1);
+    b.line_height_multiplier = None;
+    normal.layout_blocks(vec![b]);
+
+    assert!(
+        tight.content_height() < normal.content_height(),
+        "0.8x must compress: got {} vs {} at 1.0x",
+        tight.content_height(),
+        normal.content_height()
+    );
+}
+
 #[test]
 fn mixed_text_and_image_both_render() {
     let mut ts = make_typesetter();
@@ -2445,8 +2514,14 @@ fn zoom_2x_scales_glyph_coordinates() {
             g1[3] * 2.0
         );
         // And still clearly magnified, not stuck at 1×.
-        assert!(g2[2] > g1[2] * 1.5, "width should roughly double under zoom 2");
-        assert!(g2[3] > g1[3] * 1.5, "height should roughly double under zoom 2");
+        assert!(
+            g2[2] > g1[2] * 1.5,
+            "width should roughly double under zoom 2"
+        );
+        assert!(
+            g2[3] > g1[3] * 1.5,
+            "height should roughly double under zoom 2"
+        );
     }
 }
 

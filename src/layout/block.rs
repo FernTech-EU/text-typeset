@@ -364,13 +364,29 @@ pub fn layout_block(
         RunOrder::Logical(base_direction),
     );
 
-    // Apply line height multiplier
+    // Apply line height multiplier.
+    //
+    // The multiplier expresses "N times the font's own line box", so it must
+    // stretch only that font-driven space. A line holding an inline image
+    // taller than the font's ascent already reports `line_height` inflated to
+    // fit the picture (`break_into_lines`, paragraph.rs), and multiplying THAT
+    // adds a fraction of the *image's* height as blank space below it — a 1.5×
+    // interline setting turned a 200px image into ~100px of dead space before
+    // the next block, which is the "huge gap under an image" report.
+    //
+    // So the multiplier is applied only to lines that were not image-inflated,
+    // which leaves it working in both directions. Comparing against a *scaled*
+    // natural height instead would silently cancel any multiplier below 1.0 for
+    // every line in the block, image or not — and sub-1.0 line heights arrive
+    // unclamped from imported HTML (`line-height: 0.8`) and from djot's
+    // `{line_height=800}`.
     let line_height_mul = params.line_height_multiplier.unwrap_or(1.0).max(0.1);
+    let natural_line_height = metrics.ascent + metrics.descent + metrics.leading;
 
     // Compute y positions for each line (relative to block content top)
     let mut y = 0.0f32;
     for line in &mut lines {
-        if line_height_mul != 1.0 {
+        if line_height_mul != 1.0 && line.line_height <= natural_line_height + f32::EPSILON {
             line.line_height *= line_height_mul;
         }
         line.y = y + line.ascent; // y is the baseline position

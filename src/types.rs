@@ -98,6 +98,13 @@ pub struct ImageQuad {
     pub screen: [f32; 4],
     /// Image resource name (matches `FragmentContent::Image::name` from text-document).
     pub name: String,
+    /// Document-absolute character offset of this image's single `U+FFFC`.
+    ///
+    /// The name alone cannot say *which* placement this is — a document may
+    /// hold one picture in three places — so anything that has to answer "is
+    /// THIS image inside the selection" needs the offset. Same value, derived
+    /// the same way, as the offset `hit_test` reports for a click on it.
+    pub char_offset: usize,
 }
 
 /// A colored rectangle for decorations (underlines, selections, borders, etc.).

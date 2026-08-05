@@ -337,6 +337,19 @@ pub(crate) fn render_block_at_offset(
                 render_frame.images.push(crate::types::ImageQuad {
                     screen: [pen_x, image_y, image_w, image_h],
                     name: image_name.clone(),
+                    // Derived exactly as `hit_test::find_position_in_line`
+                    // derives it for a click, so a painted selection and a
+                    // clicked one agree about which image this is. `cluster`
+                    // is in character space by the time it reaches a line —
+                    // `paragraph.rs` converts every glyph's byte cluster in a
+                    // final pass.
+                    char_offset: block.position
+                        + positioned_run
+                            .shaped_run
+                            .glyphs
+                            .first()
+                            .map(|g| g.cluster as usize)
+                            .unwrap_or(line.char_range.start),
                 });
                 continue;
             }
