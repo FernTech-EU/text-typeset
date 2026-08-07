@@ -2128,7 +2128,7 @@ impl DocumentFlow {
 
     /// The base direction of the paragraph containing `position`.
     ///
-    /// Home and End want this one rather than [`direction_at`]: they move
+    /// Home and End want this one rather than [`Self::direction_at`]: they move
     /// to the logical ends of the line, and which visual edge those land
     /// on is a property of the paragraph, not of whatever run the caret
     /// happens to be sitting in.
@@ -2184,10 +2184,7 @@ impl DocumentFlow {
     ///
     /// Searches top-level blocks, table cells and frames, so a caret
     /// inside a table or a blockquote resolves like any other.
-    fn block_containing<'a>(
-        &'a self,
-        position: usize,
-    ) -> Option<&'a crate::layout::block::BlockLayout> {
+    fn block_containing(&self, position: usize) -> Option<&crate::layout::block::BlockLayout> {
         // `end` is inclusive so a caret at the very end of a block still
         // resolves, but that makes a block boundary match *two* blocks.
         // `blocks` is a HashMap, so picking whichever `find` reached

@@ -233,15 +233,6 @@ impl Alignment {
     }
 }
 
-/// Break shaped runs into lines that fit within `available_width`.
-///
-/// Strategy: shape-first-then-break.
-/// 1. The caller has already shaped the full paragraph into one or more ShapedRuns.
-/// 2. We use unicode-linebreak to find break opportunities in the original text.
-/// 3. We map break positions to glyph boundaries via cluster values.
-/// 4. Greedy line wrapping: accumulate glyph advances, break at the last
-///    allowed opportunity before exceeding the width.
-/// 5. Apply alignment per line.
 /// Put a line's runs into visual order per UAX #9 rule L2, then re-lay
 /// their x positions left to right.
 ///
@@ -295,6 +286,15 @@ fn reorder_line_visually(line: &mut LayoutLine) {
     line.runs = reordered;
 }
 
+/// Break shaped runs into lines that fit within `available_width`.
+///
+/// Strategy: shape-first-then-break.
+/// 1. The caller has already shaped the full paragraph into one or more ShapedRuns.
+/// 2. We use unicode-linebreak to find break opportunities in the original text.
+/// 3. We map break positions to glyph boundaries via cluster values.
+/// 4. Greedy line wrapping: accumulate glyph advances, break at the last
+///    allowed opportunity before exceeding the width.
+/// 5. Apply alignment per line.
 #[allow(clippy::too_many_arguments)]
 pub fn break_into_lines(
     runs: Vec<ShapedRun>,

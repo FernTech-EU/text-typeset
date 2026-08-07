@@ -246,7 +246,10 @@ fn zoom_and_scale_factor_are_orthogonal() {
 
     assert_eq!(ra_glyphs.len(), rb_glyphs.len());
     let densify = text_typeset::quantize_raster_scale(1.5);
-    assert!(densify > 1.0, "zoom 1.5 must land above the 1× densify bucket");
+    assert!(
+        densify > 1.0,
+        "zoom 1.5 must land above the 1× densify bucket"
+    );
     for (qa, qb) in ra_glyphs.iter().zip(rb_glyphs.iter()) {
         if qa.screen[2] < 0.5 {
             continue;

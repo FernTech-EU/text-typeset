@@ -432,6 +432,15 @@ pub fn shape_text_with_buffer(
     Some((run, recycled))
 }
 
+pub struct FontMetricsPx {
+    pub ascent: f32,
+    pub descent: f32,
+    pub leading: f32,
+    pub underline_offset: f32,
+    pub strikeout_offset: f32,
+    pub stroke_size: f32,
+}
+
 /// Get font metrics (ascent, descent, leading) scaled to logical pixels.
 ///
 /// Scales at `size_px * scale_factor` (physical) and divides by
@@ -503,8 +512,9 @@ impl BidiParagraph {
 /// `None` asks unicode-bidi to auto-detect (rules P2/P3: the first strong
 /// character wins, defaulting to LTR when the text has none). An explicit
 /// level overrides that — which is the point of honouring a stored
-/// paragraph direction, since P2/P3 mis-detects any RTL paragraph that
-/// happens to open with a digit, a Latin acronym or an opening quote.
+/// paragraph direction, since P2/P3 incorrectly classifies any RTL
+/// paragraph that happens to open with a digit, a Latin acronym or an
+/// opening quote.
 fn base_para_level(base: TextDirection) -> Option<unicode_bidi::Level> {
     match base {
         TextDirection::Auto => None,
@@ -719,7 +729,7 @@ mod bidi_tests {
     fn an_explicit_base_direction_overrides_first_strong_detection() {
         // A Latin acronym *is* strong (type L), so rule P2 stops at the
         // "NASA" and calls this Arabic paragraph left-to-right — the
-        // real mis-detection, and the reason a stored paragraph
+        // real false detection, and the reason a stored paragraph
         // direction has to win over guessing.
         let text = "NASA \u{0623}\u{0639}\u{0644}\u{0646}\u{062A}";
         assert_eq!(
@@ -815,13 +825,4 @@ mod bidi_tests {
         assert!(para.runs.is_empty());
         assert_eq!(para.para_level, 1);
     }
-}
-
-pub struct FontMetricsPx {
-    pub ascent: f32,
-    pub descent: f32,
-    pub leading: f32,
-    pub underline_offset: f32,
-    pub strikeout_offset: f32,
-    pub stroke_size: f32,
 }
