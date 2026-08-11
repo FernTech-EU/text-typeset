@@ -306,15 +306,25 @@ pub fn break_into_lines(
     hyphenator: Option<Hyphenator>,
     run_order: RunOrder,
 ) -> Vec<LayoutLine> {
+    // Where a glyph-less line puts the caret. The alignment pass below only
+    // moves runs, so an empty line must carry this explicitly.
+    let empty_caret_x = {
+        let base = match run_order {
+            RunOrder::Logical(base) => base,
+            RunOrder::AlreadyVisual => TextDirection::LeftToRight,
+        };
+        empty_line_caret_x(alignment, base, first_line_indent, available_width)
+    };
+
     if runs.is_empty() || text.is_empty() {
         // Empty paragraph: produce one empty line for the block to have height
-        return vec![make_empty_line(metrics, 0..0)];
+        return vec![make_empty_line(metrics, 0..0, empty_caret_x)];
     }
 
     // Flatten all glyphs into a single sequence with their run association
     let flat = flatten_runs(&runs);
     if flat.is_empty() {
-        return vec![make_empty_line(metrics, 0..0)];
+        return vec![make_empty_line(metrics, 0..0, empty_caret_x)];
     }
 
     // Get UAX #14 break opportunities (byte offsets in text), each
@@ -505,7 +515,7 @@ pub fn break_into_lines(
     }
 
     if lines.is_empty() {
-        lines.push(make_empty_line(metrics, 0..0));
+        lines.push(make_empty_line(metrics, 0..0, empty_caret_x));
     }
 
     // Convert glyph cluster values from byte offsets to char offsets.
@@ -717,6 +727,10 @@ fn build_line(
         width,
         char_range: char_start..char_end,
         line_height,
+        // Degenerate fallback only: a built line normally derives caret
+        // positions from its runs, but if every run came out glyph-less
+        // the caret still has the line's start to sit at.
+        empty_caret_x: indent,
     }
 }
 
@@ -766,7 +780,11 @@ fn extract_sub_run(
     Some((sub_run, advance))
 }
 
-fn make_empty_line(metrics: &FontMetricsPx, char_range: Range<usize>) -> LayoutLine {
+fn make_empty_line(
+    metrics: &FontMetricsPx,
+    char_range: Range<usize>,
+    empty_caret_x: f32,
+) -> LayoutLine {
     LayoutLine {
         runs: Vec::new(),
         y: 0.0,
@@ -776,6 +794,55 @@ fn make_empty_line(metrics: &FontMetricsPx, char_range: Range<usize>) -> LayoutL
         width: 0.0,
         char_range,
         line_height: metrics.ascent + metrics.descent + metrics.leading,
+        empty_caret_x,
+    }
+}
+
+/// The x where the caret sits on a line with no glyphs — i.e. where the
+/// first typed character's glyph would land. Mirrors the run-shifting
+/// arithmetic of `break_into_lines`' alignment pass with a line width of
+/// zero, so an empty paragraph's caret cannot disagree with where the
+/// first keystroke lays text out (the "caret jumps on the first
+/// character" bug).
+fn empty_line_caret_x(
+    alignment: Alignment,
+    base_direction: TextDirection,
+    first_line_indent: f32,
+    available_width: f32,
+) -> f32 {
+    let rtl = base_direction == TextDirection::RightToLeft;
+    let indent = first_line_indent;
+    let line_avail = (available_width - indent).max(0.0);
+    match alignment.resolve_for(base_direction) {
+        // In an RTL paragraph the alignment pass first moves runs to the
+        // left edge so the indent insets from the *right*; Right then
+        // shifts by the remaining width. Width zero leaves the caret at
+        // `line_avail` (RTL) or the full width (LTR).
+        Alignment::Right => {
+            if rtl {
+                line_avail
+            } else {
+                available_width
+            }
+        }
+        Alignment::Center => {
+            let shift = line_avail / 2.0;
+            if rtl { shift } else { indent + shift }
+        }
+        // Justify never justifies the last line, and a lone line is the
+        // last line, so runs keep their unshifted positions: the indent
+        // for LTR; the left edge for RTL, where the alignment pass moved
+        // them and Justify does not put the indent back.
+        Alignment::Justify => {
+            if rtl {
+                0.0
+            } else {
+                indent
+            }
+        }
+        // `resolve_for` maps Start/End onto Left/Right, so what remains is
+        // Left — which keeps runs at the indent in both directions.
+        _ => indent,
     }
 }
 

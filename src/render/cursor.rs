@@ -294,10 +294,15 @@ fn selection_rects_for_block(
             // An empty line — a blank paragraph between two prose
             // paragraphs — contributes no spans at all, so the folds
             // below would start from ±infinity and produce a rect of
-            // infinite width. Anchor the extension at the line's own
-            // start instead.
+            // infinite width. Anchor the extension where the caret sits
+            // on that line (indent/alignment-aware), matching where a
+            // typed character would appear.
             let line_x = line.runs.iter().map(|r| r.x).fold(f32::INFINITY, f32::min);
-            let anchor = if line_x.is_finite() { line_x } else { 0.0 };
+            let anchor = if line_x.is_finite() {
+                line_x
+            } else {
+                line.empty_caret_x
+            };
 
             if rtl {
                 let leftmost = spans.iter().map(|s| s.0).fold(anchor, f32::min);

@@ -56,6 +56,15 @@ pub struct LayoutLine {
     pub width: f32,
     /// Character range in the block's text.
     pub char_range: Range<usize>,
+    /// Where the caret sits when this line has no glyphs to derive a
+    /// position from — the x the first typed character's glyph would take,
+    /// honouring first-line indent, alignment and base direction (see
+    /// `empty_line_caret_x` in paragraph.rs). Without it an empty
+    /// paragraph's caret fell back to 0.0, flush left, and jumped to the
+    /// indent on the first keystroke. Only meaningful when `runs` yield no
+    /// caret stops; `build_line` records the line's start x for the
+    /// degenerate run-without-glyphs case.
+    pub empty_caret_x: f32,
 }
 
 impl LayoutLine {
@@ -112,7 +121,10 @@ impl LayoutLine {
     pub fn x_for_offset_with_affinity(&self, offset: usize, affinity: CursorAffinity) -> f32 {
         let stops = self.caret_stops();
         if stops.is_empty() {
-            return 0.0;
+            // An empty line has no glyph to anchor to; use the position the
+            // first typed character would lay out at, so the caret does not
+            // jump on the first keystroke of an indented / aligned paragraph.
+            return self.empty_caret_x;
         }
 
         let exact: Vec<&CaretStop> = stops.iter().filter(|s| s.offset == offset).collect();
