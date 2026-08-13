@@ -50,6 +50,19 @@ pub struct BridgeOptions {
     /// engine-level default text colour. Only applied when the run
     /// carries no explicit `foreground_color`.
     pub code_block_foreground: Option<[f32; 4]>,
+    /// Foreground used for character runs carrying a hyperlink
+    /// (`TextFormat.is_anchor == Some(true)`). `None` keeps the
+    /// engine-level default text colour — which is what a host that
+    /// never sets this gets, so a link stays indistinguishable from
+    /// prose unless the host says otherwise.
+    ///
+    /// Only applied when the run carries no explicit `foreground_color`,
+    /// the same rule `code_block_foreground` follows: an author who
+    /// picked a colour always wins over a convention.
+    ///
+    /// Wins over `code_block_foreground` when a run is both, because
+    /// "you can follow this" is the more useful of the two signals.
+    pub link_foreground: Option<[f32; 4]>,
     /// When `Some(c)`, every character of every block laid out with
     /// these options is replaced with `c` — one echo char per source
     /// `char` — before shaping. This is the password / secure-field
@@ -75,6 +88,7 @@ impl Default for BridgeOptions {
         Self {
             code_block_background: [0.95, 0.95, 0.95, 1.0],
             code_block_foreground: None,
+            link_foreground: None,
             echo_char: None,
             hyphenate_justified: false,
         }
@@ -323,12 +337,18 @@ fn convert_fragment(
                 .as_deref()
                 .map(|f| f.eq_ignore_ascii_case("monospace"))
                 .unwrap_or(false);
+            // A link outranks monospace: an inline-code span that is also a
+            // link should read as followable first. An explicit colour still
+            // beats both — the author asked for it.
+            let is_link = format.is_anchor.unwrap_or(false);
             let foreground_color =
                 format
                     .foreground_color
                     .as_ref()
                     .map(convert_color)
-                    .or(if is_monospace {
+                    .or(if is_link {
+                        opts.link_foreground
+                    } else if is_monospace {
                         opts.code_block_foreground
                     } else {
                         None
@@ -445,17 +465,26 @@ fn convert_vertical_alignment(
     }
 }
 
+/// The underline a run gets, in precedence order: an explicit style, then an
+/// explicit on/off flag, then — for a link that has said nothing either way —
+/// the single underline a reader expects a link to carry.
+///
+/// The link rule is a **default, not an override**: `font_underline:
+/// Some(false)` still wins, so an author who deliberately unstyled their links
+/// keeps them unstyled. Colour follows the same rule, in `convert_fragment`.
+///
+/// `underline_color` needs no matching rule — `None` already means "use the
+/// foreground", so a link's underline picks up the link colour for free.
 fn convert_underline_style(format: &text_document::TextFormat) -> crate::types::UnderlineStyle {
     use crate::types::UnderlineStyle;
     match &format.underline_style {
         Some(s) => convert_underline_style_value(s),
-        None => {
-            if format.font_underline.unwrap_or(false) {
-                UnderlineStyle::Single
-            } else {
-                UnderlineStyle::None
-            }
-        }
+        None => match format.font_underline {
+            Some(true) => UnderlineStyle::Single,
+            Some(false) => UnderlineStyle::None,
+            None if format.is_anchor.unwrap_or(false) => UnderlineStyle::Single,
+            None => UnderlineStyle::None,
+        },
     }
 }
 
@@ -816,5 +845,128 @@ mod tests {
         assert_eq!(iso639_1(""), None);
         assert_eq!(iso639_1("x"), None);
         assert_eq!(iso639_1("12"), None);
+    }
+
+    // ── Link styling ────────────────────────────────────────────
+    //
+    // Colour and underline are *defaults* a link gets when it has said
+    // nothing itself. Every one of these tests is really about precedence:
+    // what an author set explicitly must always win, or a document loses
+    // formatting it asked for.
+
+    use super::{BridgeOptions, convert_fragment, convert_underline_style};
+    use crate::types::UnderlineStyle;
+    use text_document::{FragmentContent, TextFormat};
+
+    const LINK_FG: [f32; 4] = [0.1, 0.3, 0.9, 1.0];
+    const CODE_FG: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
+    const AUTHOR_FG: text_document::Color = text_document::Color {
+        red: 200,
+        green: 10,
+        blue: 10,
+        alpha: 255,
+    };
+
+    fn opts() -> BridgeOptions {
+        BridgeOptions {
+            link_foreground: Some(LINK_FG),
+            code_block_foreground: Some(CODE_FG),
+            ..Default::default()
+        }
+    }
+
+    fn fragment_of(format: TextFormat) -> FragmentContent {
+        FragmentContent::Text {
+            text: "text".to_string(),
+            format,
+            offset: 0,
+            length: 4,
+            element_id: 0,
+            word_starts: Vec::new(),
+        }
+    }
+
+    fn link() -> TextFormat {
+        TextFormat {
+            anchor_href: Some("https://example.com".into()),
+            is_anchor: Some(true),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_link_takes_the_hosts_link_colour() {
+        let params = convert_fragment(&fragment_of(link()), 1.0, &opts(), 0);
+        assert_eq!(params.foreground_color, Some(LINK_FG));
+    }
+
+    #[test]
+    fn plain_prose_takes_no_colour_at_all() {
+        let params = convert_fragment(&fragment_of(TextFormat::default()), 1.0, &opts(), 0);
+        assert_eq!(
+            params.foreground_color, None,
+            "the link colour must not leak onto ordinary text"
+        );
+    }
+
+    #[test]
+    fn an_explicit_colour_beats_the_link_colour() {
+        let fmt = TextFormat {
+            foreground_color: Some(AUTHOR_FG),
+            ..link()
+        };
+        let params = convert_fragment(&fragment_of(fmt), 1.0, &opts(), 0);
+        assert_ne!(
+            params.foreground_color,
+            Some(LINK_FG),
+            "an author who picked a colour must keep it"
+        );
+    }
+
+    #[test]
+    fn a_link_beats_monospace_when_a_run_is_both() {
+        let fmt = TextFormat {
+            font_family: Some("monospace".into()),
+            ..link()
+        };
+        let params = convert_fragment(&fragment_of(fmt), 1.0, &opts(), 0);
+        assert_eq!(
+            params.foreground_color,
+            Some(LINK_FG),
+            "\"you can follow this\" is the more useful of the two signals"
+        );
+    }
+
+    #[test]
+    fn a_link_is_underlined_by_default() {
+        assert_eq!(convert_underline_style(&link()), UnderlineStyle::Single);
+    }
+
+    #[test]
+    fn plain_prose_is_not_underlined() {
+        assert_eq!(
+            convert_underline_style(&TextFormat::default()),
+            UnderlineStyle::None
+        );
+    }
+
+    #[test]
+    fn an_author_may_turn_a_links_underline_off() {
+        // The default must be a default. A writer who unstyled their links
+        // keeps them unstyled.
+        let fmt = TextFormat {
+            font_underline: Some(false),
+            ..link()
+        };
+        assert_eq!(convert_underline_style(&fmt), UnderlineStyle::None);
+    }
+
+    #[test]
+    fn an_explicit_underline_style_beats_the_link_default() {
+        let fmt = TextFormat {
+            underline_style: Some(text_document::UnderlineStyle::WaveUnderline),
+            ..link()
+        };
+        assert_eq!(convert_underline_style(&fmt), UnderlineStyle::Wave);
     }
 }

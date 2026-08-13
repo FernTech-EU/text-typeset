@@ -168,6 +168,11 @@ pub struct DocumentFlow {
     /// explicit `foreground_color`. `None` keeps the engine's default
     /// `text_color`. See [`Self::set_code_block_foreground`].
     code_block_foreground: Option<[f32; 4]>,
+    /// Foreground used by the text-document bridge for runs carrying a
+    /// hyperlink that set no explicit `foreground_color`. `None` keeps
+    /// the engine's default `text_color`, which leaves links looking
+    /// exactly like prose. See [`Self::set_link_foreground`].
+    link_foreground: Option<[f32; 4]>,
     /// Echo / masking character for secure (password) fields. When
     /// `Some(c)`, every character laid out by `layout_full` is replaced
     /// with `c` before shaping, so the real text never reaches the
@@ -235,6 +240,7 @@ impl DocumentFlow {
             text_color: [0.0, 0.0, 0.0, 1.0],
             code_block_background: [0.95, 0.95, 0.95, 1.0],
             code_block_foreground: None,
+            link_foreground: None,
             echo_char: None,
             hyphenate_justified: false,
             cursors: Vec::new(),
@@ -481,6 +487,7 @@ impl DocumentFlow {
         let opts = BridgeOptions {
             code_block_background: self.code_block_background,
             code_block_foreground: self.code_block_foreground,
+            link_foreground: self.link_foreground,
             echo_char: self.echo_char,
             hyphenate_justified: self.hyphenate_justified,
         };
@@ -721,6 +728,7 @@ impl DocumentFlow {
         let opts = crate::bridge::BridgeOptions {
             code_block_background: self.code_block_background,
             code_block_foreground: self.code_block_foreground,
+            link_foreground: self.link_foreground,
             echo_char: self.echo_char,
             hyphenate_justified: self.hyphenate_justified,
         };
@@ -2044,6 +2052,22 @@ impl DocumentFlow {
         self.code_block_foreground
     }
 
+    /// Set the foreground used for hyperlink runs that carry no explicit
+    /// `foreground_color`. `None` (default) keeps the engine's
+    /// `text_color` — i.e. links that look like prose. Hosts wire this
+    /// from the active theme, alongside `set_code_block_foreground`.
+    ///
+    /// Changing it needs a full relayout: the colour is baked into the
+    /// shaped runs at layout time, not resolved at paint.
+    pub fn set_link_foreground(&mut self, color: Option<[f32; 4]>) {
+        self.link_foreground = color;
+    }
+
+    /// Current link foreground override.
+    pub fn link_foreground(&self) -> Option<[f32; 4]> {
+        self.link_foreground
+    }
+
     /// Set the echo / masking character for secure (password) fields.
     ///
     /// When `Some(c)`, every character laid out by future `layout_full`
@@ -2494,7 +2518,7 @@ fn rasterize_glyph_quad(
 /// relies on linear minification rather than rasterizing below logical
 /// size.
 ///
-/// Kept in lockstep with `bastyde_canvas::quantize_raster_scale` (scene
+/// Kept in lockstep with `teksilo_canvas::quantize_raster_scale` (scene
 /// transform densification uses the same ladder).
 pub fn quantize_raster_scale(scale: f32) -> f32 {
     if !scale.is_finite() || scale <= 1.0 {
