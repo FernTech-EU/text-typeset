@@ -1528,3 +1528,31 @@ fn relayout_block_inside_nested_frame_updates_heights() {
         height_after,
     );
 }
+
+/// A relayout of a block this flow has never laid out must say so, not return
+/// quietly.
+///
+/// The incremental relayout's other half is shifting the document-character
+/// position of every block after the edited one. Doing neither, silently, left
+/// the caller believing the layout had caught up while every later block still
+/// described the document as it was before the edit.
+#[test]
+fn relaying_out_an_unknown_block_reports_the_miss() {
+    let ts = make_typesetter();
+    let mut flow = FlowLayout::default();
+    flow.layout_blocks(ts.font_registry(), vec![make_block(1, "only block")], 400.0);
+
+    assert!(
+        !flow.relayout_block(ts.font_registry(), &make_block(99, "not here"), 400.0),
+        "a block that is neither top-level, nor in a table cell, nor in a frame \
+         cannot be relaid out, and the caller has to hear about it"
+    );
+    assert!(
+        flow.relayout_block(
+            ts.font_registry(),
+            &make_block(1, "only block, longer"),
+            400.0
+        ),
+        "the block that is there still relays out"
+    );
+}
