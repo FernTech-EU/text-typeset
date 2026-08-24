@@ -370,3 +370,83 @@ fn a_background_span_tiles_seamlessly_across_a_run_boundary() {
     // …and covering two runs still reshapes nothing.
     assert_eq!(positions(&mut ts), base);
 }
+
+// ── The overlay must not resurrect a stale block position ────────────────────
+
+/// **A whole-flow recolor reverted every block after an edit to its pre-edit
+/// document position.**
+///
+/// `relayout_block` does two things: reshape the edited block, and shift the
+/// document-character `position` of every block after it by the edit's length.
+/// It re-captured the *base* — the pristine shaped output the overlay
+/// re-derives from — for the edited block only. The later blocks' bases kept
+/// the pre-shift position.
+///
+/// `apply_paint_spans_for` then re-derives every block with
+/// `*b = apply_paint_spans(base_b, spans)`, and `apply_paint_spans` opens with
+/// `base.clone()` — the whole `BlockLayout`, `position` included. So the shift
+/// was silently undone for every block after the edit.
+///
+/// `hit_test` and `caret_rect` both read `block.position` directly, so from
+/// then on a click near a later paragraph's start resolved N characters early
+/// and its selection highlights painted N characters off — N being however many
+/// characters had been typed. Nothing recovered until a full relayout.
+///
+/// The overlay only runs when some highlighting feature is live (spell check, a
+/// search session, a caret band), which is why this never showed up in a bare
+/// editor.
+#[test]
+fn whole_flow_recolor_keeps_the_shifted_block_positions() {
+    use std::collections::HashMap;
+
+    let mut ts = make_typesetter();
+    ts.layout_blocks(vec![
+        helpers::make_block_at(1, 0, "para one"),
+        helpers::make_block_at(2, 9, "para two"),
+    ]);
+    assert_eq!(ts.flow.block_position(2), Some(9), "as laid out");
+
+    // Type four characters into block 1.
+    ts.relayout_block(&helpers::make_block_at(1, 0, "para onetest"));
+    assert_eq!(
+        ts.flow.block_position(2),
+        Some(13),
+        "the relayout must shift the following block by the four characters typed"
+    );
+
+    // Any whole-document recolor — an empty span map is enough, and is exactly
+    // what clearing a search does.
+    ts.flow.apply_paint_spans_for(HashMap::new());
+    assert_eq!(
+        ts.flow.block_position(2),
+        Some(13),
+        "a recolor changes colours; it must not move the block back to where it \
+         started before the edit"
+    );
+}
+
+/// The same fault seen the way a writer sees it: through the hit-test.
+#[test]
+fn a_recolor_after_an_edit_leaves_later_blocks_clickable_at_the_right_offset() {
+    use std::collections::HashMap;
+
+    let mut ts = make_typesetter();
+    ts.layout_blocks(vec![
+        helpers::make_block_at(1, 0, "para one"),
+        helpers::make_block_at(2, 9, "para two"),
+    ]);
+    ts.relayout_block(&helpers::make_block_at(1, 0, "para onetest"));
+
+    let probe = |ts: &Typesetter| {
+        let r = ts.caret_rect(13);
+        ts.hit_test(0.5, r[1] + r[3] * 0.5).map(|h| h.position)
+    };
+    assert_eq!(probe(&ts), Some(13), "before the recolor");
+    ts.flow.apply_paint_spans_for(HashMap::new());
+    assert_eq!(
+        probe(&ts),
+        Some(13),
+        "clicking the start of the second paragraph must still land on its first \
+         character after a recolor"
+    );
+}

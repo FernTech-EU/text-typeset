@@ -625,19 +625,28 @@ impl FlowLayout {
     ///
     /// Finds the block in top-level blocks, table cells, or frames, re-layouts
     /// it, and propagates any height delta to subsequent flow items.
+    /// Relayout the one block `params` names, wherever it lives, and shift the
+    /// document-character positions of everything after it.
+    ///
+    /// Returns `false` when the block is in none of the three places a block can
+    /// be — top level, a table cell, a frame. The caller must treat that as a
+    /// failed relayout and fall back to a full one: the shift is half of this
+    /// method's job, so skipping it silently leaves every later block's
+    /// `position` describing the document as it was before the edit.
+    #[must_use]
     pub fn relayout_block(
         &mut self,
         registry: &FontRegistry,
         params: &BlockLayoutParams,
         available_width: f32,
-    ) {
+    ) -> bool {
         let block_id = params.block_id;
 
         // Top-level block
         if self.blocks.contains_key(&block_id) {
             self.relayout_top_level_block(registry, params, available_width);
             self.refresh_base_and_overlay_block(block_id);
-            return;
+            return true;
         }
 
         // Table cell block: scan tables for the block_id
@@ -656,7 +665,7 @@ impl FlowLayout {
             let char_delta = new_char_len as isize - old_char_len as isize;
             self.shift_block_positions_after_table_block(table_id, block_id, char_delta);
             self.refresh_base_and_overlay_block(block_id);
-            return;
+            return true;
         }
 
         // Frame block: scan frames (including nested frames) for the block_id
@@ -673,7 +682,10 @@ impl FlowLayout {
             let char_delta = new_char_len as isize - old_char_len as isize;
             self.shift_block_positions_after_frame_block(frame_id, block_id, char_delta);
             self.refresh_base_and_overlay_block(block_id);
+            return true;
         }
+
+        false
     }
 
     /// Relayout a top-level block (existing logic).
@@ -1210,6 +1222,25 @@ fn shift_frame_positions_after_block(
 
 /// Re-derive `b` in place from its base + pending overlay. No-op if no base
 /// was captured for it.
+///
+/// The base supplies the *shaped* output — runs, glyphs, line breaks — which is
+/// what a recolor re-derives. It does **not** supply where the block sits.
+///
+/// Those are two different lifetimes. A base is captured when its own block is
+/// laid out, but a block's placement changes without it being laid out at all:
+/// an edit anywhere above shifts every later block's document-character
+/// `position` and its `y`, live, through `shift_block_positions_after_block` and
+/// `shift_items_after_block` — neither of which re-captures the bases they
+/// invalidate. `apply_paint_spans` opens with `base.clone()`, so overlaying
+/// without care puts a block back where it was before an edit it was never part
+/// of. `hit_test` and `caret_rect` read `position` straight, so from then on a
+/// click near that block landed N characters early and its selection highlights
+/// painted N characters off — N being however many characters had been typed
+/// above it. Only a full relayout recovered.
+///
+/// Carrying the live placement across is the whole fix: it is exactly the two
+/// fields the shift functions own, and the live block is never the staler of the
+/// two — a relayout of this block refreshes its base from it.
 fn overlay_block_in_place(
     b: &mut BlockLayout,
     base: &HashMap<usize, BlockLayout>,
@@ -1218,7 +1249,10 @@ fn overlay_block_in_place(
     if let Some(base_b) = base.get(&b.block_id) {
         let empty: Vec<PaintSpan> = Vec::new();
         let spans = pending.get(&b.block_id).unwrap_or(&empty);
+        let (position, y) = (b.position, b.y);
         *b = apply_paint_spans(base_b, spans);
+        b.position = position;
+        b.y = y;
     }
 }
 
@@ -1310,7 +1344,7 @@ fn block_max_width(block: &BlockLayout) -> f32 {
         .fold(0.0_f32, f32::max)
 }
 
-fn find_block_ref(flow: &FlowLayout, block_id: usize) -> Option<&BlockLayout> {
+pub(crate) fn find_block_ref(flow: &FlowLayout, block_id: usize) -> Option<&BlockLayout> {
     if let Some(b) = flow.blocks.get(&block_id) {
         return Some(b);
     }

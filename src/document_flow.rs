@@ -86,6 +86,18 @@ pub enum RelayoutError {
     /// flow. The caller must re-run `layout_full` /
     /// `layout_blocks` to rebuild everything at the new scale.
     ScaleDirty,
+    /// `params.block_id` is not in this flow's layout — not a top-level block,
+    /// not in any table cell, not in any frame.
+    ///
+    /// Reported rather than ignored because ignoring it is worse than it looks:
+    /// the incremental path exists to relayout the block AND shift the
+    /// document-character positions of everything after it, so doing nothing
+    /// leaves the flow holding pre-edit text and pre-edit positions while the
+    /// document has moved on. Hit-testing and selection painting then disagree
+    /// with the document by the edit's length, for every block after it, until
+    /// something forces a full layout. The caller's recovery is to run
+    /// [`DocumentFlow::layout_full`].
+    UnknownBlock(usize),
 }
 
 impl std::fmt::Display for RelayoutError {
@@ -97,6 +109,9 @@ impl std::fmt::Display for RelayoutError {
             RelayoutError::ScaleDirty => f.write_str(
                 "relayout_block called after a scale-factor change without a fresh layout_*",
             ),
+            RelayoutError::UnknownBlock(id) => {
+                write!(f, "relayout_block: block {id} is not in this layout")
+            }
         }
     }
 }
@@ -797,8 +812,12 @@ impl DocumentFlow {
         }
         self.flow_layout.scale_factor = service.scale_factor;
         self.flow_layout.font_scale = self.font_scale;
-        self.flow_layout
-            .relayout_block(&service.font_registry, params, self.layout_width());
+        if !self
+            .flow_layout
+            .relayout_block(&service.font_registry, params, self.layout_width())
+        {
+            return Err(RelayoutError::UnknownBlock(params.block_id));
+        }
         self.note_layout_done(service);
         Ok(())
     }
@@ -2095,6 +2114,17 @@ impl DocumentFlow {
 
     /// Visual position and height of a laid-out block. Returns
     /// `None` if `block_id` is not in the current layout.
+    /// The document-character offset the layout believes `block_id` starts at.
+    ///
+    /// The layout keeps its own copy of each block's position and shifts it on
+    /// every incremental relayout; this is that copy, which is what `hit_test`
+    /// and `caret_rect` resolve against. Exposed so a caller — or a test — can
+    /// check it against the document's own idea, since the two silently drifting
+    /// apart is invisible until a click lands on the wrong character.
+    pub fn block_position(&self, block_id: usize) -> Option<usize> {
+        crate::layout::flow::find_block_ref(&self.flow_layout, block_id).map(|b| b.position)
+    }
+
     pub fn block_visual_info(&self, block_id: usize) -> Option<BlockVisualInfo> {
         let block = self.flow_layout.blocks.get(&block_id)?;
         Some(BlockVisualInfo {

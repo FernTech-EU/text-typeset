@@ -415,7 +415,10 @@ fn flow_relayout_block_shifts_subsequent() {
         1,
         "This is a much longer paragraph that will certainly wrap to multiple lines at a narrow width like one hundred pixels wide.",
     );
-    flow.relayout_block(ts.font_registry(), &longer, 100.0);
+    assert!(
+        flow.relayout_block(ts.font_registry(), &longer, 100.0),
+        "the block must be found in the layout"
+    );
 
     let y2_after = flow.blocks.get(&2).unwrap().y;
     assert!(
@@ -445,7 +448,10 @@ fn flow_relayout_block_shifts_subsequent_positions() {
     // Cut "Sec" (3 chars) from block 2: it now holds "ond".
     // New document layout: blocks at 0, 6, 10.
     let shorter = make_block_at(2, 6, "ond");
-    flow.relayout_block(ts.font_registry(), &shorter, 800.0);
+    assert!(
+        flow.relayout_block(ts.font_registry(), &shorter, 800.0),
+        "the block must be found in the layout"
+    );
 
     assert_eq!(flow.blocks.get(&1).unwrap().position, 0);
     assert_eq!(flow.blocks.get(&2).unwrap().position, 6);
@@ -1363,7 +1369,10 @@ fn relayout_block_handles_top_margin_change() {
     // Increase block 2's top margin from 5 to 30
     let mut b2_updated = make_block(2, "Second.");
     b2_updated.top_margin = 30.0;
-    flow.relayout_block(ts.font_registry(), &b2_updated, 800.0);
+    assert!(
+        flow.relayout_block(ts.font_registry(), &b2_updated, 800.0),
+        "the block must be found in the layout"
+    );
 
     let y2_after = flow.blocks.get(&2).unwrap().y;
     let y3_after = flow.blocks.get(&3).unwrap().y;
