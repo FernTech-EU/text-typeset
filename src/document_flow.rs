@@ -2325,16 +2325,40 @@ impl DocumentFlow {
     /// Scroll the minimum amount needed to make the current caret
     /// visible. Call after arrow-key / click / typing. Returns
     /// `Some(new_offset)` if the scroll moved, `None` otherwise.
+    ///
+    /// The caret this reads is the one last handed to [`set_cursor`](Self::set_cursor),
+    /// which an editor typically refreshes once per frame — so calling this
+    /// from inside a key handler corrects for wherever the caret was on the
+    /// *previous* frame, not where the keystroke just put it. Editors that move
+    /// a cursor and reveal it in the same breath want
+    /// [`ensure_position_visible`](Self::ensure_position_visible), which takes
+    /// the position outright.
     pub fn ensure_caret_visible(&mut self) -> Option<f32> {
         if self.cursors.is_empty() {
             return None;
         }
         let pos = self.cursors[0].position;
         let affinity = self.cursors[0].affinity;
+        self.ensure_position_visible(pos, affinity)
+    }
+
+    /// Scroll the minimum amount needed to make `position` visible. Returns
+    /// `Some(new_offset)` if the scroll moved, `None` otherwise.
+    ///
+    /// The explicit-position form of [`ensure_caret_visible`](Self::ensure_caret_visible),
+    /// for the common editor shape where a key handler moves its own cursor and
+    /// then reveals it: the flow's cached cursor is a frame behind at that
+    /// moment, and correcting against it leaves the caret the keystroke just
+    /// moved sitting outside the viewport until the *next* keystroke.
+    pub fn ensure_position_visible(
+        &mut self,
+        position: usize,
+        affinity: crate::types::CursorAffinity,
+    ) -> Option<f32> {
         let rect = crate::render::hit_test::caret_rect(
             &self.flow_layout,
             self.scroll_offset,
-            pos,
+            position,
             affinity,
         );
         let caret_screen_y = rect[1];

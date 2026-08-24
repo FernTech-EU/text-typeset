@@ -477,6 +477,82 @@ fn ensure_caret_visible_scrolls_down_when_needed() {
 }
 
 #[test]
+fn ensure_position_visible_reveals_a_position_the_cached_cursor_has_not_caught_up_to() {
+    // The shape every editor is in: a key handler moves its own cursor and
+    // reveals it in the same breath, while the flow's cached cursor is only
+    // refreshed once a frame. Correcting against the cache leaves the caret the
+    // keystroke just moved sitting outside the viewport until the next one.
+    let mut ts = Typesetter::new();
+    let face = ts.register_font(NOTO_SANS);
+    ts.set_default_font(face, 16.0);
+    ts.set_viewport(800.0, 50.0);
+
+    let blocks: Vec<_> = (0..20)
+        .map(|i| {
+            let mut b = make_block(i, &format!("Paragraph {i}."));
+            b.position = i * 20;
+            b
+        })
+        .collect();
+    ts.layout_blocks(blocks);
+
+    // The cache still says "top of the document" — the frame that would have
+    // refreshed it has not run yet.
+    ts.set_cursor(&text_typeset::CursorDisplay {
+        position: 0,
+        anchor: 0,
+        affinity: text_typeset::CursorAffinity::Downstream,
+        visible: true,
+        selected_cells: vec![],
+    });
+
+    assert!(
+        ts.ensure_caret_visible().is_none(),
+        "the stale cache is at the top, so it sees nothing to correct"
+    );
+    let moved = ts.ensure_position_visible(300, text_typeset::CursorAffinity::Downstream);
+    assert!(
+        moved.is_some_and(|off| off > 0.0),
+        "the live position is deep in the document and must be scrolled to, \
+         got {moved:?}"
+    );
+}
+
+#[test]
+fn ensure_position_visible_agrees_with_ensure_caret_visible_once_the_cache_is_current() {
+    let mut ts = Typesetter::new();
+    let face = ts.register_font(NOTO_SANS);
+    ts.set_default_font(face, 16.0);
+    ts.set_viewport(800.0, 50.0);
+    let blocks: Vec<_> = (0..20)
+        .map(|i| {
+            let mut b = make_block(i, &format!("Paragraph {i}."));
+            b.position = i * 20;
+            b
+        })
+        .collect();
+    ts.layout_blocks(blocks);
+    ts.set_cursor(&text_typeset::CursorDisplay {
+        position: 300,
+        anchor: 300,
+        affinity: text_typeset::CursorAffinity::Downstream,
+        visible: true,
+        selected_cells: vec![],
+    });
+
+    let via_cache = ts.ensure_caret_visible();
+    let settled = ts.scroll_offset();
+    // Re-asking for the same position now that the view has settled is a no-op.
+    assert!(via_cache.is_some(), "the first call has work to do");
+    assert!(
+        ts.ensure_position_visible(300, text_typeset::CursorAffinity::Downstream)
+            .is_none(),
+        "already revealed"
+    );
+    assert_eq!(ts.scroll_offset(), settled, "and it left the offset alone");
+}
+
+#[test]
 fn scroll_to_position_changes_offset() {
     let mut ts = make_typesetter();
     let blocks: Vec<_> = (0..10)

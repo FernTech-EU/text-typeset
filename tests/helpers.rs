@@ -534,6 +534,16 @@ impl Typesetter {
     pub fn ensure_caret_visible(&mut self) -> Option<f32> {
         self.flow.ensure_caret_visible()
     }
+    pub fn ensure_position_visible(
+        &mut self,
+        position: usize,
+        affinity: text_typeset::CursorAffinity,
+    ) -> Option<f32> {
+        self.flow.ensure_position_visible(position, affinity)
+    }
+    pub fn scroll_offset(&self) -> f32 {
+        self.flow.scroll_offset()
+    }
 
     pub fn content_width_mode(&self) -> ContentWidthMode {
         self.flow.content_width_mode()
