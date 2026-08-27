@@ -33,25 +33,25 @@ hyphenation-western-european = [
 hyphenation-all-languages = ["hypher/default"]
 
 [dependencies]
-harfrust = "0.12.0"
+harfrust = "0.13.3"
 swash = "0.2.10"
-fontdb = "0.23.0"
+fontdb = "0.24.0"
 # OS/2 unicode-range + cmap reader for font writing-system (script)
 # classification. Resolves to the exact version already pulled in
 # transitively by fontdb, so it adds no newly-compiled crate.
 ttf-parser = "0.25"
 etagere = "0.3"
-icu_segmenter = "2"
+icu_segmenter = "2.3.0"
 unicode-bidi = "0.3"
 thiserror = "2.0"
-text-document = { path = "../text-document/crates/public_api", version = "1.9.3", optional = true }
+text-document = { path = "../text-document/crates/public_api", version = "1.10.2", optional = true }
 # Languages are gated by this crate's `hyphenation-*` features (see
 # [features]); the runtime language is chosen via ISO 639-1 code
 # (hypher::Lang::from_iso).
 hypher = { version = "0.1.7", default-features = false }
 
 [dev-dependencies]
-text-document = { path = "../text-document/crates/public_api", version = "1.9.3" }
+text-document = { path = "../text-document/crates/public_api", version = "1.10.2" }
 insta = { version = "1.48.0", features = ["yaml"] }
 proptest = "1"
 
