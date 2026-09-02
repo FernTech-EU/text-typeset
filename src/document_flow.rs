@@ -545,9 +545,11 @@ impl DocumentFlow {
             }
         }
 
-        // Capture the freshly-shaped blocks as the paint-overlay base. The
-        // engine applies paint spans afterward (recolor without reshape).
-        self.flow_layout.refresh_base_blocks();
+        // A full layout leaves the live blocks as their own paint base, so this
+        // only has to drop whatever the previous layout had captured. The engine
+        // applies paint spans afterward (recolor without reshape) and captures a
+        // base per block as it does.
+        self.flow_layout.reset_paint_base();
 
         self.note_layout_done(service);
     }
@@ -835,6 +837,12 @@ impl DocumentFlow {
 
     /// Apply (or clear) the paint overlay for a single block. Returns `false`
     /// if the block has no captured base (no full layout yet).
+    /// How many blocks currently hold a captured paint base. See
+    /// [`FlowLayout::captured_paint_bases`](crate::layout::FlowLayout::captured_paint_bases).
+    pub fn captured_paint_bases(&self) -> usize {
+        self.flow_layout.captured_paint_bases()
+    }
+
     pub fn apply_block_paint_spans(
         &mut self,
         block_id: usize,

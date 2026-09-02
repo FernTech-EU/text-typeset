@@ -43,11 +43,20 @@ pub struct FlowLayout {
     /// alongside `scale_factor`; multiplies the resolved font size so all text
     /// grows logically (advances, line heights, content height) and reflows.
     pub font_scale: f32,
-    /// Un-overlaid (shaped) copy of every laid-out block, keyed by block_id.
-    /// The paint-overlay fast path re-derives the live blocks from these so
-    /// repeated highlight changes never compound run splits. Populated by a
-    /// full layout (`layout_blocks`) and refreshed per block on incremental
-    /// relayout.
+    /// Un-overlaid (shaped) copy of each block that currently carries a paint
+    /// overlay, keyed by block_id. The paint-overlay fast path re-derives the
+    /// live block from this so repeated highlight changes never compound run
+    /// splits.
+    ///
+    /// **Captured on write, not at layout.** Straight out of a full layout the
+    /// live blocks already ARE their own base, so a block enters this map only
+    /// when an overlay is first applied to it, and leaves when its overlay is
+    /// cleared. A document nothing highlights therefore keeps this map empty.
+    /// Capturing every block up front instead cost a second deep copy of the
+    /// whole shaped layout: on a book-length manuscript, 17 MB that only a
+    /// handful of blocks would ever have used.
+    ///
+    /// Absent means "identical to the live block", never "missing".
     base_blocks: HashMap<usize, BlockLayout>,
     /// Current paint-only highlight overlay per block_id. Empty for a block
     /// means "no overlay" (base colors). Kept so an incrementally relaid block
@@ -186,23 +195,58 @@ impl FlowLayout {
         self.pending_paint_spans.clear();
     }
 
-    /// Re-capture every laid-out block (top-level, table cells, frames,
-    /// recursively) as the paint-overlay base. Called after a full layout.
-    pub(crate) fn refresh_base_blocks(&mut self) {
+    /// Drop every captured paint base. Called after a full layout, where the
+    /// freshly-shaped blocks are their own base and any prior overlay is gone.
+    ///
+    /// This used to deep-copy every laid-out block into `base_blocks` here. The
+    /// copy was correct and almost entirely unused: only a block that actually
+    /// receives an overlay is ever re-derived from its base, and
+    /// [`ensure_base`](Self::ensure_base) takes that copy at the moment it is
+    /// needed instead.
+    pub(crate) fn reset_paint_base(&mut self) {
         self.base_blocks.clear();
-        let mut collected: Vec<(usize, BlockLayout)> = Vec::new();
-        for b in self.blocks.values() {
-            collected.push((b.block_id, b.clone()));
+    }
+
+    /// How many blocks currently hold a captured paint base.
+    ///
+    /// The memory characteristic this layout makes a promise about: a block
+    /// enters the set when an overlay is applied to it and leaves when that
+    /// overlay is cleared, so a document nothing highlights answers `0`. Read by
+    /// the paint-overlay tests, and useful in a debugger when a highlight looks
+    /// stuck.
+    pub fn captured_paint_bases(&self) -> usize {
+        self.base_blocks.len()
+    }
+
+    /// Capture `block_id`'s live (base-coloured) shaped output, if it has not
+    /// been captured already. Returns whether the block exists at all.
+    ///
+    /// Called immediately before an overlay is applied, which is the only moment
+    /// a base is needed and the only moment the live block is still guaranteed
+    /// to be un-overlaid.
+    fn ensure_base(&mut self, block_id: usize) -> bool {
+        if self.base_blocks.contains_key(&block_id) {
+            return true;
         }
-        for t in self.tables.values() {
-            collect_table_base(t, &mut collected);
+        let Some(fresh) = find_block_ref(self, block_id).cloned() else {
+            return false;
+        };
+        self.base_blocks.insert(block_id, fresh);
+        true
+    }
+
+    /// Forget the captured base of every block that no longer carries an
+    /// overlay, so toggling a highlight on and off does not accumulate copies.
+    ///
+    /// Safe only after the overlay walk has restored those blocks from their
+    /// bases: dropping a base a block still needs would freeze its colours.
+    fn drop_unused_bases(&mut self) {
+        if self.pending_paint_spans.is_empty() {
+            self.base_blocks.clear();
+            return;
         }
-        for f in self.frames.values() {
-            collect_frame_base(f, &mut collected);
-        }
-        for (id, b) in collected {
-            self.base_blocks.insert(id, b);
-        }
+        self.base_blocks
+            .retain(|id, _| self.pending_paint_spans.contains_key(id));
     }
 
     /// Replace the paint-only color overlay for the whole flow.
@@ -213,6 +257,18 @@ impl FlowLayout {
     /// advances, line breaks, and heights do NOT — no reshape, no reflow.
     /// Blocks absent from the map reset to base colors.
     pub fn apply_paint_spans_for(&mut self, spans_by_block: HashMap<usize, Vec<PaintSpan>>) {
+        // An empty span list means "no overlay", exactly as it does in
+        // `apply_block_paint_spans`. Keeping such an entry would pin a base copy
+        // for a block that carries nothing, which is the cost this capture-on-
+        // write layout exists to avoid.
+        let mut spans_by_block = spans_by_block;
+        spans_by_block.retain(|_, spans| !spans.is_empty());
+        // Capture a base for every block about to be overlaid. A block that is
+        // only being cleared keeps the base it was given when it was overlaid,
+        // which is what the walk below restores it from.
+        for &block_id in spans_by_block.keys() {
+            self.ensure_base(block_id);
+        }
         self.pending_paint_spans = spans_by_block;
         let base = &self.base_blocks;
         let pending = &self.pending_paint_spans;
@@ -229,65 +285,81 @@ impl FlowLayout {
         for f in self.frames.values_mut() {
             overlay_frame_in_place(f, base, pending);
         }
+        self.drop_unused_bases();
     }
 
     /// Apply (or clear, when `spans` is empty) the paint overlay for a single
-    /// block, re-derived from its base. Returns `false` if `block_id` has no
-    /// captured base.
+    /// block, re-derived from its base.
+    ///
+    /// Returns `false` when there is nothing to do: either the block is not in
+    /// this layout at all, or it is being cleared while it never carried an
+    /// overlay, in which case it already shows its base colours. Callers read
+    /// the answer as "did anything change here", and repaint on `true`.
     pub fn apply_block_paint_spans(&mut self, block_id: usize, spans: &[PaintSpan]) -> bool {
-        if !self.base_blocks.contains_key(&block_id) {
-            return false;
-        }
         if spans.is_empty() {
+            if !self.base_blocks.contains_key(&block_id) {
+                return false;
+            }
             self.pending_paint_spans.remove(&block_id);
         } else {
+            if !self.ensure_base(block_id) {
+                return false;
+            }
             self.pending_paint_spans.insert(block_id, spans.to_vec());
         }
         let base = &self.base_blocks;
         let pending = &self.pending_paint_spans;
         if let Some(b) = self.blocks.get_mut(&block_id) {
             overlay_block_in_place(b, base, pending);
+            self.drop_unused_bases();
             return true;
         }
+        let mut overlaid = false;
         for t in self.tables.values_mut() {
             for c in &mut t.cell_layouts {
                 for b in &mut c.blocks {
                     if b.block_id == block_id {
                         overlay_block_in_place(b, base, pending);
-                        return true;
+                        overlaid = true;
                     }
                 }
             }
         }
+        if overlaid {
+            self.drop_unused_bases();
+            return true;
+        }
         for f in self.frames.values_mut() {
             if overlay_one_in_frame(f, block_id, base, pending) {
+                self.drop_unused_bases();
                 return true;
             }
         }
-        true
+        // The block is in none of the three places a block can live, so nothing
+        // was recoloured and the caller has nothing to repaint.
+        self.drop_unused_bases();
+        false
     }
 
-    /// After an incremental relayout of `block_id`, re-capture its (base-colored)
-    /// shaped output as the new base and re-apply its pending overlay in place.
+    /// After an incremental relayout of `block_id`, make its freshly-shaped
+    /// output the new base and re-apply its pending overlay in place.
     ///
-    /// The base re-capture happens unconditionally — even when no overlay is
-    /// currently active. The fresh shaped output IS the new base, and a later
-    /// `apply_block_paint_spans` (the engine re-applying syntax / search /
-    /// spell highlights after an edit) overlays from `base_blocks`. If we
-    /// skipped the re-capture when no spans were pending, that overlay would
-    /// re-derive the block from the STALE pre-edit base and silently clobber
-    /// the just-typed text (visible only in highlights-on views; a full
-    /// re-layout from a resize would restore it).
+    /// The stale capture is **dropped** rather than refreshed. The fresh shaped
+    /// output IS the new base, so a later `apply_block_paint_spans` (the engine
+    /// re-applying syntax, search or spell highlights after an edit) captures it
+    /// on demand. Keeping the pre-edit copy instead would have that overlay
+    /// re-derive the block from text the writer has already changed, silently
+    /// clobbering the just-typed characters (visible only in highlights-on
+    /// views; a full re-layout from a resize would restore it).
     fn refresh_base_and_overlay_block(&mut self, block_id: usize) {
-        let fresh = find_block_ref(self, block_id).cloned();
-        if let Some(b) = fresh {
-            self.base_blocks.insert(block_id, b);
-        }
-        // Nothing to overlay if no block carries pending paint spans — the
-        // freshly-reshaped block already holds the correct base-colored output.
-        if self.pending_paint_spans.is_empty() {
+        self.base_blocks.remove(&block_id);
+        // Nothing to overlay unless this block itself carries pending spans: the
+        // freshly-reshaped block already holds the correct base-colored output,
+        // and every other block keeps whatever base it was captured with.
+        if !self.pending_paint_spans.contains_key(&block_id) {
             return;
         }
+        self.ensure_base(block_id);
         let base = &self.base_blocks;
         let pending = &self.pending_paint_spans;
         if let Some(b) = self.blocks.get_mut(&block_id) {
@@ -313,17 +385,18 @@ impl FlowLayout {
 
     /// Add a single block to the flow at the current y position.
     ///
-    /// **Bulk-path primitive.** This deliberately does *not* capture the
-    /// block's paint-overlay base; [`layout_blocks`](Self::layout_blocks) calls
-    /// it in a loop and captures every base once at the end, which keeps the
-    /// bulk path single-pass.
+    /// **Bulk-path primitive.** This touches no paint-overlay bookkeeping at
+    /// all, which is what a full layout wants: it runs after `clear`, so no
+    /// stale base or pending overlay can be left over, and a base is captured
+    /// on demand when an overlay is first applied.
     ///
-    /// Appending to an *existing* layout has no such follow-up pass, so use
-    /// [`append_block`](Self::append_block) instead. Reaching for this one is
-    /// silent when wrong: the block lays out and renders fine, but
-    /// [`apply_block_paint_spans`](Self::apply_block_paint_spans) then
-    /// early-returns `false` for it forever, so it never receives syntax,
-    /// search, or spell highlighting and nothing reports a problem.
+    /// Appending to an *existing* layout is different, because that layout may
+    /// already hold a base or a pending overlay under the same block_id — from
+    /// a previous block that carried it. Use
+    /// [`append_block`](Self::append_block) there. Reaching for this one is
+    /// silent when wrong: the block lays out and renders fine, but a stale base
+    /// re-derives it from the *previous* block's shaped output the next time
+    /// anything recolours it.
     pub fn add_block(
         &mut self,
         registry: &FontRegistry,
@@ -372,21 +445,16 @@ impl FlowLayout {
     /// Append one block to the tail of an *existing* layout, in O(1).
     ///
     /// This is [`add_block`](Self::add_block) plus the paint-overlay
-    /// bookkeeping that a bulk layout would otherwise do afterwards.
-    /// [`layout_blocks`](Self::layout_blocks) calls `add_block` in a loop and
-    /// then re-captures every block's base in one pass
-    /// (`refresh_base_blocks`, O(N)); `add_block` on its own therefore leaves
-    /// the appended block absent from `base_blocks`, and a later
-    /// `apply_paint_spans_for` would re-derive it from a missing base.
+    /// bookkeeping that only a tail append needs. A full layout runs after
+    /// `clear`, so nothing can be stale there; appending into a live layout can
+    /// land on a block_id that still carries the base and pending overlay of the
+    /// block that held it before, and re-deriving the new block from that base
+    /// would paint the *old* block's shaped output.
     ///
-    /// Reusing the bulk refresh for a tail append would re-clone the whole
-    /// document once per appended line — precisely the O(N)-per-line cost this
-    /// method exists to avoid — so it refreshes just the appended block
-    /// (`refresh_base_and_overlay_block`, the same O(1) call
+    /// So it drops any stale base for the appended id and re-applies whatever
+    /// overlay is still pending for it, in O(1)
+    /// (`refresh_base_and_overlay_block`, the same call
     /// [`relayout_block`](Self::relayout_block) already relies on).
-    ///
-    /// `add_block` itself is left untouched: `layout_blocks` depends on its
-    /// current no-base-refresh behaviour to keep the bulk path single-pass.
     pub fn append_block(
         &mut self,
         registry: &FontRegistry,
@@ -594,9 +662,8 @@ impl FlowLayout {
         // Describes the whole document, not the shaped window — so the
         // scrollbar spans everything even though almost none of it is shaped.
         self.set_uniform_extent(total_rows, row_height);
-        // O(window), not O(document): the bulk path's cost is bounded by what
-        // is actually resident.
-        self.refresh_base_blocks();
+        // O(1): a full layout leaves the live blocks as their own base.
+        self.reset_paint_base();
     }
 
     /// Lay out a sequence of blocks vertically.
@@ -614,11 +681,10 @@ impl FlowLayout {
         for params in &block_params {
             self.add_block(registry, params, available_width);
         }
-        // Capture the freshly-shaped blocks as the paint-overlay base. A full
-        // layout clears any prior overlay (see `clear`), so the live blocks ARE
-        // the base at this point; the engine applies paint spans afterward via
-        // `apply_paint_spans_for`.
-        self.refresh_base_blocks();
+        // A full layout clears any prior overlay (see `clear`), so the live
+        // blocks ARE the base at this point. The engine applies paint spans
+        // afterward via `apply_paint_spans_for`, which captures what it needs.
+        self.reset_paint_base();
     }
 
     /// Update a single block's layout and shift subsequent items if height changed.
@@ -1307,26 +1373,6 @@ fn overlay_one_in_frame(
         }
     }
     false
-}
-
-fn collect_table_base(t: &TableLayout, out: &mut Vec<(usize, BlockLayout)>) {
-    for c in &t.cell_layouts {
-        for b in &c.blocks {
-            out.push((b.block_id, b.clone()));
-        }
-    }
-}
-
-fn collect_frame_base(f: &FrameLayout, out: &mut Vec<(usize, BlockLayout)>) {
-    for b in &f.blocks {
-        out.push((b.block_id, b.clone()));
-    }
-    for t in &f.tables {
-        collect_table_base(t, out);
-    }
-    for nested in &f.frames {
-        collect_frame_base(nested, out);
-    }
 }
 
 /// Find a block by id across top-level / table cells / frames.

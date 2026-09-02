@@ -193,16 +193,65 @@ fn edit_then_empty_overlay_renders_new_text_not_stale_base() {
     );
 
     // The editor's highlights-on path then re-applies the block's paint spans.
-    // With no syntax/search highlight on this block the span set is empty —
-    // this used to reset the block to the STALE base ("Hello"), losing the edit.
-    let applied = ts.flow.apply_block_paint_spans(1, &[]);
-    assert!(applied, "top-level block must be found for overlay");
+    // With no syntax/search highlight on this block the span set is empty. This
+    // used to reset the block to the STALE base ("Hello"), losing the edit.
+    //
+    // Nothing has overlaid this block, so no base was ever captured and there is
+    // nothing to revert to: the call reports that it changed nothing.
+    assert!(
+        !ts.flow.apply_block_paint_spans(1, &[]),
+        "a block that was never overlaid has nothing to clear"
+    );
 
     assert_eq!(
         ts.render().glyphs.len(),
         after_edit,
         "empty overlay after an edit must preserve the edited text, not revert \
          to the pre-edit base"
+    );
+}
+
+/// The same regression on the path that can actually still hit it: a block that
+/// WAS overlaid holds a captured base, and an edit must replace it. If the
+/// pre-edit copy survived the reshape, the empty overlay below would re-derive
+/// the block from text the writer has already changed.
+#[test]
+fn an_edit_replaces_a_captured_base_rather_than_reverting_to_it() {
+    let mut ts = laid_out("Hello");
+
+    // Overlay first, which is what captures the base.
+    ts.flow.apply_block_paint_spans(
+        1,
+        &[PaintSpan {
+            char_start: 0,
+            char_end: 5,
+            foreground_color: Some(RED),
+            ..Default::default()
+        }],
+    );
+    assert_eq!(ts.flow.captured_paint_bases(), 1);
+    let before = ts.render().glyphs.len();
+
+    ts.relayout_block(&make_block(1, "Hello world"));
+    let after_edit = ts.render().glyphs.len();
+    assert!(after_edit > before, "the reshape must add glyphs");
+
+    // The overlay is still pending, so the reshape re-captured a base from the
+    // FRESH text and re-applied the colours to it. Clearing is therefore a real
+    // change, and what it restores is the edited text.
+    assert!(
+        ts.flow.apply_block_paint_spans(1, &[]),
+        "an overlay that is still active has something to clear"
+    );
+    assert_eq!(
+        ts.render().glyphs.len(),
+        after_edit,
+        "the edited text must survive: the pre-edit base must not come back"
+    );
+    assert_eq!(
+        ts.flow.captured_paint_bases(),
+        0,
+        "and the capture goes with the overlay it existed for"
     );
 }
 
@@ -448,5 +497,128 @@ fn a_recolor_after_an_edit_leaves_later_blocks_clickable_at_the_right_offset() {
         Some(13),
         "clicking the start of the second paragraph must still land on its first \
          character after a recolor"
+    );
+}
+
+// ── The paint base is captured on write ──────────────────────────────────────
+//
+// A block's un-overlaid copy exists so an overlay can be re-derived without
+// compounding run splits. It is only ever read for a block that carries an
+// overlay, so it is only ever taken for one. Capturing every block at layout
+// time instead cost a second deep copy of the whole shaped layout: on a
+// book-length manuscript, 17 MB that a handful of blocks would ever have used.
+
+#[test]
+fn a_document_with_no_overlay_holds_no_base_copies() {
+    let mut ts = laid_out("Nothing here is ever highlighted.");
+    let _ = ts.render();
+    assert_eq!(
+        ts.flow.captured_paint_bases(),
+        0,
+        "laying out must not copy blocks nothing has asked to recolour"
+    );
+}
+
+#[test]
+fn only_the_overlaid_block_is_copied() {
+    let mut ts = make_typesetter();
+    ts.layout_blocks(vec![
+        make_block(1, "First paragraph"),
+        make_block(2, "Second paragraph"),
+        make_block(3, "Third paragraph"),
+    ]);
+    let _ = ts.render();
+    assert_eq!(ts.flow.captured_paint_bases(), 0);
+
+    ts.flow.apply_block_paint_spans(
+        2,
+        &[PaintSpan {
+            char_start: 0,
+            char_end: 6,
+            foreground_color: Some(RED),
+            ..Default::default()
+        }],
+    );
+
+    assert_eq!(
+        ts.flow.captured_paint_bases(),
+        1,
+        "only the block that was recoloured needs a base to be re-derived from"
+    );
+}
+
+#[test]
+fn clearing_an_overlay_releases_its_base_copy() {
+    let mut ts = laid_out("Clear me twice");
+    let base_colors = colors(&mut ts);
+
+    ts.flow.apply_block_paint_spans(
+        1,
+        &[PaintSpan {
+            char_start: 0,
+            char_end: 5,
+            foreground_color: Some(BLUE),
+            ..Default::default()
+        }],
+    );
+    assert_eq!(ts.flow.captured_paint_bases(), 1);
+
+    ts.flow.apply_block_paint_spans(1, &[]);
+    assert_eq!(
+        colors(&mut ts),
+        base_colors,
+        "clearing must restore the base colours"
+    );
+    assert_eq!(
+        ts.flow.captured_paint_bases(),
+        0,
+        "and must not go on holding a copy of a block nothing overlays"
+    );
+}
+
+#[test]
+fn the_whole_flow_overlay_copies_only_the_blocks_it_names() {
+    use std::collections::HashMap;
+
+    let mut ts = make_typesetter();
+    ts.layout_blocks(vec![
+        make_block(1, "First paragraph"),
+        make_block(2, "Second paragraph"),
+        make_block(3, "Third paragraph"),
+    ]);
+    let _ = ts.render();
+
+    let mut spans: HashMap<usize, Vec<PaintSpan>> = HashMap::new();
+    spans.insert(
+        3,
+        vec![PaintSpan {
+            char_start: 0,
+            char_end: 5,
+            foreground_color: Some(GREEN),
+            ..Default::default()
+        }],
+    );
+    ts.flow.apply_paint_spans_for(spans);
+    assert_eq!(
+        ts.flow.captured_paint_bases(),
+        1,
+        "a wash that names one block must not copy the other two"
+    );
+
+    // A later wash naming nothing clears the overlay and the copy with it.
+    ts.flow.apply_paint_spans_for(HashMap::new());
+    assert_eq!(ts.flow.captured_paint_bases(), 0);
+}
+
+#[test]
+fn clearing_a_block_that_was_never_overlaid_reports_nothing_to_repaint() {
+    let mut ts = laid_out("Untouched");
+    assert!(
+        !ts.flow.apply_block_paint_spans(1, &[]),
+        "a block already showing its base colours has nothing to change"
+    );
+    assert!(
+        !ts.flow.apply_block_paint_spans(404, &[]),
+        "and a block that is not in this layout at all has nothing either"
     );
 }
