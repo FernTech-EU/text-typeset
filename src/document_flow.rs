@@ -836,7 +836,7 @@ impl DocumentFlow {
     }
 
     /// How many blocks currently hold a captured paint base. See
-    /// [`FlowLayout::captured_paint_bases`](crate::layout::FlowLayout::captured_paint_bases).
+    /// [`FlowLayout::captured_paint_bases`].
     pub fn captured_paint_bases(&self) -> usize {
         self.flow_layout.captured_paint_bases()
     }
