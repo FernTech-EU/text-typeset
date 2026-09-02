@@ -835,14 +835,16 @@ impl DocumentFlow {
         self.flow_layout.apply_paint_spans_for(spans_by_block);
     }
 
-    /// Apply (or clear) the paint overlay for a single block. Returns `false`
-    /// if the block has no captured base (no full layout yet).
     /// How many blocks currently hold a captured paint base. See
     /// [`FlowLayout::captured_paint_bases`](crate::layout::FlowLayout::captured_paint_bases).
     pub fn captured_paint_bases(&self) -> usize {
         self.flow_layout.captured_paint_bases()
     }
 
+    /// Apply (or clear) the paint overlay for a single block. Returns `false`
+    /// when nothing was recoloured: either the block is not in this layout, or
+    /// it is being cleared while it never carried an overlay and so already
+    /// shows its base colours.
     pub fn apply_block_paint_spans(
         &mut self,
         block_id: usize,
