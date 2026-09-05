@@ -511,3 +511,70 @@ fn character_geometry_multi_line_behaviour_is_unchanged() {
         );
     }
 }
+
+#[test]
+fn block_line_geometry_reports_positive_widths_for_an_rtl_block() {
+    // The block path and the paragraph path go through the same capture,
+    // but only the block path is what the rich-text and code editors
+    // consume — and it is the one `character_geometry` used to answer
+    // from caret-stop deltas, which read right-to-left advances as
+    // negative and clamped them to zero.
+    let mut ts = hebrew_typesetter();
+    ts.layout_blocks(vec![make_block(1, SHALOM)]);
+    ts.render();
+
+    let lines = ts.block_line_geometry(1, SHALOM);
+    assert_eq!(lines.len(), 1, "four letters fit one line");
+    let segment = lines[0]
+        .segments
+        .first()
+        .expect("a shaped Hebrew word has one right-to-left segment");
+    assert_eq!(segment.direction, GeometryDirection::RightToLeft);
+    assert_eq!(segment.characters.len(), SHALOM.chars().count());
+    for (i, ch) in segment.characters.iter().enumerate() {
+        assert!(
+            ch.width > 0.0,
+            "letter {i} reports width {} — a right-to-left advance must be positive",
+            ch.width
+        );
+    }
+
+    let advances: f32 = segment.characters.iter().map(|c| c.width).sum();
+    assert!(
+        (advances - segment.rect[2]).abs() < 0.05,
+        "the letters' advances ({advances}) must tile the segment box ({})",
+        segment.rect[2]
+    );
+}
+
+#[test]
+fn block_line_geometry_stacks_lines_from_the_block_top() {
+    // Line boxes are relative to the block's top edge, not to the
+    // document: a consumer offsets them by the block's own origin.
+    let mut ts = make_typesetter();
+    ts.set_content_width(160.0);
+    ts.layout_blocks(vec![make_block(1, PROSE)]);
+    ts.render();
+
+    let lines = ts.block_line_geometry(1, PROSE);
+    assert!(lines.len() > 1, "the block must wrap for this test");
+    assert!(
+        lines[0].rect[1].abs() < 0.01,
+        "the first line's box starts at the block top, not at {}",
+        lines[0].rect[1]
+    );
+    for pair in lines.windows(2) {
+        assert!(
+            pair[1].rect[1] > pair[0].rect[1],
+            "line {} sits at {} but line {} sits at {}",
+            pair[0].index,
+            pair[0].rect[1],
+            pair[1].index,
+            pair[1].rect[1]
+        );
+        assert!(
+            pair[1].baseline > pair[0].baseline,
+            "baselines must descend with the lines"
+        );
+    }
+}
