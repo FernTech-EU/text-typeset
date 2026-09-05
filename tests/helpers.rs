@@ -8,8 +8,9 @@ use text_typeset::layout::paragraph::Alignment;
 use text_typeset::layout::table::{CellLayoutParams, TableLayoutParams};
 use text_typeset::{
     AtlasSnapshot, BlockVisualInfo, CharacterGeometry, ContentWidthMode, CursorDisplay,
-    DecorationKind, DocumentFlow, FontFaceId, HitTestResult, InlineMarkup, ParagraphResult,
-    RenderFrame, SingleLineResult, TextFontService, TextFormat, UnderlineStyle, VerticalAlignment,
+    DecorationKind, DocumentFlow, FontFaceId, HitTestResult, InlineMarkup, LayoutGeometry,
+    LineGeometry, ParagraphResult, RenderFrame, SingleLineResult, TextFontService, TextFormat,
+    UnderlineStyle, VerticalAlignment,
 };
 
 pub const NOTO_SANS: &[u8] = include_bytes!("../test-fonts/NotoSans-Variable.ttf");
@@ -470,6 +471,71 @@ impl Typesetter {
             max_lines,
             self.raster_scale,
         )
+    }
+
+    // ── Layout with geometry ──
+    pub fn layout_single_line_with_geometry(
+        &mut self,
+        text: &str,
+        format: &TextFormat,
+        max_width: Option<f32>,
+    ) -> (SingleLineResult, LayoutGeometry) {
+        self.flow.layout_single_line_with_geometry(
+            &mut self.service,
+            text,
+            format,
+            max_width,
+            self.raster_scale,
+        )
+    }
+    pub fn layout_paragraph_with_geometry(
+        &mut self,
+        text: &str,
+        format: &TextFormat,
+        max_width: f32,
+        max_lines: Option<usize>,
+    ) -> (ParagraphResult, LayoutGeometry) {
+        self.flow.layout_paragraph_with_geometry(
+            &mut self.service,
+            text,
+            format,
+            max_width,
+            max_lines,
+            self.raster_scale,
+        )
+    }
+    pub fn layout_single_line_markup_with_geometry(
+        &mut self,
+        markup: &InlineMarkup,
+        format: &TextFormat,
+        max_width: Option<f32>,
+    ) -> (SingleLineResult, LayoutGeometry) {
+        self.flow.layout_single_line_markup_with_geometry(
+            &mut self.service,
+            markup,
+            format,
+            max_width,
+            self.raster_scale,
+        )
+    }
+    pub fn layout_paragraph_markup_with_geometry(
+        &mut self,
+        markup: &InlineMarkup,
+        format: &TextFormat,
+        max_width: f32,
+        max_lines: Option<usize>,
+    ) -> (ParagraphResult, LayoutGeometry) {
+        self.flow.layout_paragraph_markup_with_geometry(
+            &mut self.service,
+            markup,
+            format,
+            max_width,
+            max_lines,
+            self.raster_scale,
+        )
+    }
+    pub fn block_line_geometry(&self, block_id: usize, text: &str) -> Vec<LineGeometry> {
+        self.flow.block_line_geometry(block_id, text)
     }
 
     // ── Hit testing & geometry ──

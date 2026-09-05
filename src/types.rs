@@ -533,3 +533,143 @@ pub struct CharacterGeometry {
     pub position: f32,
     pub width: f32,
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Line geometry — per-line, per-character layout output
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Reading direction of a [`LineSegment`], as the accessibility layer
+/// needs it.
+///
+/// Distinct from [`crate::TextDirection`], which carries an `Auto`
+/// variant meaning "not yet resolved". Geometry is produced *after*
+/// shaping, so every segment's direction is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeometryDirection {
+    LeftToRight,
+    RightToLeft,
+}
+
+/// How a laid-out line ends.
+///
+/// A screen reader distinguishes a paragraph break (which it announces
+/// and which occupies a character in the accessible text) from a soft
+/// wrap (which occupies nothing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineEnd {
+    /// The line was broken to fit the wrap width. Nothing in the source
+    /// separates it from the next line.
+    SoftWrap,
+    /// The line ends with an explicit break in the source.
+    ///
+    /// `chars` is how many source *characters* the break occupies (1 for
+    /// `\n`, 2 for `\r\n`); `bytes` is how many source *bytes* it occupies
+    /// (likewise 1 and 2). AccessKit counts a `\r\n` as a single character
+    /// whose `character_lengths` entry is 2 — that is `bytes`.
+    HardBreak { chars: u8, bytes: u8 },
+    /// The line ends because the source does.
+    EndOfText,
+}
+
+/// Where a line's trailing ellipsis was drawn, for a line the layout
+/// truncated.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineTruncation {
+    /// Leading edge of the ellipsis glyph, in layout-local coordinates.
+    pub ellipsis_x: f32,
+    /// Advance width of the ellipsis glyph.
+    pub ellipsis_width: f32,
+}
+
+/// One direction-uniform stretch of a laid-out line.
+///
+/// A pure LTR or pure RTL line has exactly one segment; a bidirectional
+/// line has one per direction change, in *logical* order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineSegment {
+    /// Byte range of this segment in the source text (or, on the markup
+    /// paths, in [`LayoutGeometry::rendered_text`]).
+    pub byte_range: std::ops::Range<usize>,
+    /// Character range of this segment, in the same text.
+    pub char_range: std::ops::Range<usize>,
+    /// Reading direction of every character in this segment.
+    pub direction: GeometryDirection,
+    /// Bounding box `[x, y, width, height]` in layout-local coordinates.
+    pub rect: [f32; 4],
+    /// One entry per character of `char_range`, in **logical** order.
+    ///
+    /// `position` is measured from the segment's *leading* edge — its
+    /// left edge when [`direction`](Self::direction) is
+    /// [`GeometryDirection::LeftToRight`], its right edge when it is
+    /// [`GeometryDirection::RightToLeft`] — so positions are
+    /// non-decreasing and widths are never negative in both cases.
+    ///
+    /// A character with no advance of its own (a combining mark, the
+    /// interior of a ligature) reports its cluster's leading position and
+    /// a width of `0.0`.
+    pub characters: Vec<CharacterGeometry>,
+}
+
+/// One laid-out visual line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineGeometry {
+    /// Zero-based index of this line within the layout.
+    pub index: usize,
+    /// Byte range of the line in the source text, including any trailing
+    /// hard break (see [`LineEnd`]).
+    pub byte_range: std::ops::Range<usize>,
+    /// Character range of the line, in the same text.
+    pub char_range: std::ops::Range<usize>,
+    /// Bounding box `[x, y, width, height]` in layout-local coordinates.
+    /// `y` is the top of the line box, `height` its full line height.
+    pub rect: [f32; 4],
+    /// Baseline y in layout-local coordinates.
+    pub baseline: f32,
+    /// Where a caret sits on a line with no glyphs of its own — the x the
+    /// first typed character would take, honouring indent, alignment and
+    /// base direction.
+    pub caret_x: f32,
+    /// Direction-uniform stretches in logical order.
+    ///
+    /// **Empty means unmeasurable, never partial**: a consumer that finds
+    /// no segments must fall back to degenerate geometry for the whole
+    /// line rather than for part of it.
+    pub segments: Vec<LineSegment>,
+    /// How the line ends.
+    pub end: LineEnd,
+    /// Set when the line was cut short and an ellipsis drawn.
+    pub truncation: Option<LineTruncation>,
+}
+
+/// One hyperlink in a markup layout, reported against the rendered text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkGeometry {
+    /// Byte range of the link's label in
+    /// [`LayoutGeometry::rendered_text`] — *not* in the markup source.
+    pub rendered_byte_range: std::ops::Range<usize>,
+    /// The link target.
+    pub url: String,
+}
+
+/// Per-line, per-character geometry for one layout call.
+///
+/// Produced by the `*_with_geometry` layout methods on
+/// [`crate::DocumentFlow`]. Every range in it indexes
+/// [`rendered_text`](Self::rendered_text) when that is `Some` (the markup
+/// paths) and the caller's source text otherwise.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LayoutGeometry {
+    /// One entry per emitted line, in visual top-to-bottom order.
+    pub lines: Vec<LineGeometry>,
+    /// How many further lines the layout produced but did not emit,
+    /// because `max_lines` cut them.
+    pub dropped_lines: usize,
+    /// Byte length of the text every range indexes.
+    pub source_len: usize,
+    /// The text the ranges index, when it differs from the caller's input
+    /// — i.e. on the markup paths, where the syntax has been stripped.
+    /// `None` on the plain-text paths, where the input *is* that text.
+    pub rendered_text: Option<String>,
+    /// Hyperlinks found in the markup, against the rendered text.
+    pub links: Vec<LinkGeometry>,
+}

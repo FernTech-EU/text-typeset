@@ -57,8 +57,8 @@ use crate::shaping::shaper::{
 };
 use crate::types::{
     BlockVisualInfo, CharacterGeometry, CursorDisplay, DecorationKind, DecorationRect, GlyphQuad,
-    HitTestResult, LaidOutSpan, LaidOutSpanKind, ParagraphResult, RenderFrame, SingleLineResult,
-    TextFormat,
+    HitTestResult, LaidOutSpan, LaidOutSpanKind, LayoutGeometry, LineGeometry, LineTruncation,
+    ParagraphResult, RenderFrame, SingleLineResult, TextFormat,
 };
 
 /// Reasons [`DocumentFlow::relayout_block`] may refuse an
@@ -1212,6 +1212,41 @@ impl DocumentFlow {
         max_width: Option<f32>,
         raster_scale: f32,
     ) -> SingleLineResult {
+        self.layout_single_line_inner(service, text, format, max_width, raster_scale, false)
+            .0
+    }
+
+    /// [`layout_single_line`](Self::layout_single_line) plus per-line,
+    /// per-character geometry.
+    ///
+    /// The extra pass measures each character's leading edge and advance
+    /// so an accessibility layer can populate AccessKit's
+    /// `character_positions` / `character_widths`. Callers that do not
+    /// need it should use the plain method, which skips the pass.
+    pub fn layout_single_line_with_geometry(
+        &mut self,
+        service: &mut TextFontService,
+        text: &str,
+        format: &TextFormat,
+        max_width: Option<f32>,
+        raster_scale: f32,
+    ) -> (SingleLineResult, LayoutGeometry) {
+        self.layout_single_line_inner(service, text, format, max_width, raster_scale, true)
+    }
+
+    fn layout_single_line_inner(
+        &mut self,
+        service: &mut TextFontService,
+        text: &str,
+        format: &TextFormat,
+        max_width: Option<f32>,
+        raster_scale: f32,
+        want_geometry: bool,
+    ) -> (SingleLineResult, LayoutGeometry) {
+        let no_geometry = LayoutGeometry {
+            source_len: text.len(),
+            ..LayoutGeometry::default()
+        };
         let empty = SingleLineResult {
             width: 0.0,
             height: 0.0,
@@ -1224,7 +1259,7 @@ impl DocumentFlow {
         };
 
         if text.is_empty() {
-            return empty;
+            return (empty, no_geometry);
         }
 
         let font_point_size = format.font_size.map(|s| s as u32);
@@ -1239,12 +1274,12 @@ impl DocumentFlow {
             1.0, // standalone shaper: caller's explicit size is already theme-scaled
         ) {
             Some(r) => r,
-            None => return empty,
+            None => return (empty, no_geometry),
         };
 
         let metrics = match font_metrics_px(&service.font_registry, &resolved) {
             Some(m) => m,
-            None => return empty,
+            None => return (empty, no_geometry),
         };
         let line_height = metrics.ascent + metrics.descent + metrics.leading;
         let baseline = metrics.ascent;
@@ -1266,12 +1301,13 @@ impl DocumentFlow {
             .collect();
 
         if runs.is_empty() {
-            return empty;
+            return (empty, no_geometry);
         }
 
         let total_advance: f32 = runs.iter().map(|r| r.advance_width).sum();
 
-        let (truncate_at_visual_index, final_width, ellipsis_run) = if let Some(max_w) = max_width
+        let (truncate_at_visual_index, final_width, ellipsis_run, truncation) = if let Some(max_w) =
+            max_width
             && total_advance > max_w
         {
             let ellipsis_run = shape_text(&service.font_registry, &resolved, "\u{2026}", 0);
@@ -1293,9 +1329,17 @@ impl DocumentFlow {
                 }
             }
 
-            (Some(count), used + ellipsis_width, ellipsis_run)
+            (
+                Some(count),
+                used + ellipsis_width,
+                ellipsis_run,
+                Some(LineTruncation {
+                    ellipsis_x: used,
+                    ellipsis_width,
+                }),
+            )
         } else {
-            (None, total_advance, None)
+            (None, total_advance, None, None)
         };
 
         let text_color = format.color.unwrap_or(self.text_color);
@@ -1345,16 +1389,33 @@ impl DocumentFlow {
             }
         }
 
-        SingleLineResult {
-            width: final_width,
-            height: line_height,
-            baseline,
-            underline_offset: metrics.underline_offset,
-            underline_thickness: metrics.stroke_size,
-            glyphs: quads,
-            glyph_keys: keys,
-            spans: Vec::new(),
-        }
+        let geometry = if want_geometry {
+            crate::layout::geometry::single_line_geometry(
+                text,
+                &runs,
+                truncate_at_visual_index,
+                truncation,
+                metrics.ascent,
+                metrics.descent,
+                metrics.leading,
+            )
+        } else {
+            no_geometry
+        };
+
+        (
+            SingleLineResult {
+                width: final_width,
+                height: line_height,
+                baseline,
+                underline_offset: metrics.underline_offset,
+                underline_thickness: metrics.stroke_size,
+                glyphs: quads,
+                glyph_keys: keys,
+                spans: Vec::new(),
+            },
+            geometry,
+        )
     }
 
     /// Lay out a multi-line paragraph by wrapping text at `max_width`.
@@ -1379,6 +1440,56 @@ impl DocumentFlow {
         max_lines: Option<usize>,
         raster_scale: f32,
     ) -> ParagraphResult {
+        self.layout_paragraph_inner(
+            service,
+            text,
+            format,
+            max_width,
+            max_lines,
+            raster_scale,
+            false,
+        )
+        .0
+    }
+
+    /// [`layout_paragraph`](Self::layout_paragraph) plus per-line,
+    /// per-character geometry. See
+    /// [`layout_single_line_with_geometry`](Self::layout_single_line_with_geometry).
+    pub fn layout_paragraph_with_geometry(
+        &mut self,
+        service: &mut TextFontService,
+        text: &str,
+        format: &TextFormat,
+        max_width: f32,
+        max_lines: Option<usize>,
+        raster_scale: f32,
+    ) -> (ParagraphResult, LayoutGeometry) {
+        self.layout_paragraph_inner(
+            service,
+            text,
+            format,
+            max_width,
+            max_lines,
+            raster_scale,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn layout_paragraph_inner(
+        &mut self,
+        service: &mut TextFontService,
+        text: &str,
+        format: &TextFormat,
+        max_width: f32,
+        max_lines: Option<usize>,
+        raster_scale: f32,
+        want_geometry: bool,
+    ) -> (ParagraphResult, LayoutGeometry) {
+        let no_geometry = LayoutGeometry {
+            source_len: text.len(),
+            ..LayoutGeometry::default()
+        };
         let empty = ParagraphResult {
             width: 0.0,
             height: 0.0,
@@ -1393,7 +1504,7 @@ impl DocumentFlow {
         };
 
         if text.is_empty() || max_width <= 0.0 {
-            return empty;
+            return (empty, no_geometry);
         }
 
         let font_point_size = format.font_size.map(|s| s as u32);
@@ -1408,12 +1519,12 @@ impl DocumentFlow {
             1.0, // standalone shaper: caller's explicit size is already theme-scaled
         ) {
             Some(r) => r,
-            None => return empty,
+            None => return (empty, no_geometry),
         };
 
         let metrics = match font_metrics_px(&service.font_registry, &resolved) {
             Some(m) => m,
-            None => return empty,
+            None => return (empty, no_geometry),
         };
 
         let features = to_harfrust_features(&format.features);
@@ -1433,7 +1544,7 @@ impl DocumentFlow {
             .collect();
 
         if runs.is_empty() {
-            return empty;
+            return (empty, no_geometry);
         }
 
         let hyphenator = format.hyphenation.and_then(|h| {
@@ -1496,18 +1607,34 @@ impl DocumentFlow {
         }
 
         let line_height = metrics.ascent + metrics.descent + metrics.leading;
-        ParagraphResult {
-            width: max_line_width,
-            height: y_top,
-            baseline_first,
-            line_count,
-            line_height,
-            underline_offset: metrics.underline_offset,
-            underline_thickness: metrics.stroke_size,
-            glyphs: quads,
-            glyph_keys: keys,
-            spans: Vec::new(),
-        }
+        let geometry = if want_geometry {
+            crate::layout::geometry::paragraph_geometry(
+                &lines[..line_count],
+                text,
+                line_height,
+                lines.len() - line_count,
+                None,
+                Vec::new(),
+            )
+        } else {
+            no_geometry
+        };
+
+        (
+            ParagraphResult {
+                width: max_line_width,
+                height: y_top,
+                baseline_first,
+                line_count,
+                line_height,
+                underline_offset: metrics.underline_offset,
+                underline_thickness: metrics.stroke_size,
+                glyphs: quads,
+                glyph_keys: keys,
+                spans: Vec::new(),
+            },
+            geometry,
+        )
     }
 
     /// Single-line layout with inline markup. See
@@ -1523,57 +1650,112 @@ impl DocumentFlow {
         max_width: Option<f32>,
         raster_scale: f32,
     ) -> SingleLineResult {
+        self.layout_single_line_markup_inner(
+            service,
+            markup,
+            format,
+            max_width,
+            raster_scale,
+            false,
+        )
+        .0
+    }
+
+    /// [`layout_single_line_markup`](Self::layout_single_line_markup) plus
+    /// per-line, per-character geometry.
+    ///
+    /// Every range in the returned geometry indexes
+    /// [`LayoutGeometry::rendered_text`] — the markup with its syntax
+    /// stripped — and [`LayoutGeometry::links`] reports each link's label
+    /// against that same text.
+    pub fn layout_single_line_markup_with_geometry(
+        &mut self,
+        service: &mut TextFontService,
+        markup: &InlineMarkup,
+        format: &TextFormat,
+        max_width: Option<f32>,
+        raster_scale: f32,
+    ) -> (SingleLineResult, LayoutGeometry) {
+        self.layout_single_line_markup_inner(service, markup, format, max_width, raster_scale, true)
+    }
+
+    fn layout_single_line_markup_inner(
+        &mut self,
+        service: &mut TextFontService,
+        markup: &InlineMarkup,
+        format: &TextFormat,
+        max_width: Option<f32>,
+        raster_scale: f32,
+        want_geometry: bool,
+    ) -> (SingleLineResult, LayoutGeometry) {
         if markup.spans.is_empty() {
-            return SingleLineResult {
-                width: 0.0,
-                height: 0.0,
-                baseline: 0.0,
-                underline_offset: 0.0,
-                underline_thickness: 0.0,
-                glyphs: Vec::new(),
-                glyph_keys: Vec::new(),
-                spans: Vec::new(),
-            };
+            return (
+                SingleLineResult {
+                    width: 0.0,
+                    height: 0.0,
+                    baseline: 0.0,
+                    underline_offset: 0.0,
+                    underline_thickness: 0.0,
+                    glyphs: Vec::new(),
+                    glyph_keys: Vec::new(),
+                    spans: Vec::new(),
+                },
+                LayoutGeometry::default(),
+            );
         }
 
-        let per_span: Vec<(SingleLineResult, &crate::layout::inline_markup::InlineSpan)> = markup
+        let per_span: Vec<(
+            SingleLineResult,
+            LayoutGeometry,
+            &crate::layout::inline_markup::InlineSpan,
+        )> = markup
             .spans
             .iter()
             .map(|sp| {
                 let fmt = merge_format(format, sp.attrs);
-                let r = if sp.text.is_empty() {
-                    SingleLineResult {
-                        width: 0.0,
-                        height: 0.0,
-                        baseline: 0.0,
-                        underline_offset: 0.0,
-                        underline_thickness: 0.0,
-                        glyphs: Vec::new(),
-                        glyph_keys: Vec::new(),
-                        spans: Vec::new(),
-                    }
+                let (r, g) = if sp.text.is_empty() {
+                    (
+                        SingleLineResult {
+                            width: 0.0,
+                            height: 0.0,
+                            baseline: 0.0,
+                            underline_offset: 0.0,
+                            underline_thickness: 0.0,
+                            glyphs: Vec::new(),
+                            glyph_keys: Vec::new(),
+                            spans: Vec::new(),
+                        },
+                        LayoutGeometry::default(),
+                    )
                 } else {
-                    self.layout_single_line(service, &sp.text, &fmt, None, raster_scale)
+                    self.layout_single_line_inner(
+                        service,
+                        &sp.text,
+                        &fmt,
+                        None,
+                        raster_scale,
+                        want_geometry,
+                    )
                 };
-                (r, sp)
+                (r, g, sp)
             })
             .collect();
 
-        let total_width: f32 = per_span.iter().map(|(r, _)| r.width).sum();
+        let total_width: f32 = per_span.iter().map(|(r, _, _)| r.width).sum();
         let line_height = per_span
             .iter()
-            .map(|(r, _)| r.height)
+            .map(|(r, _, _)| r.height)
             .fold(0.0f32, f32::max);
         let baseline = per_span
             .iter()
-            .map(|(r, _)| r.baseline)
+            .map(|(r, _, _)| r.baseline)
             .fold(0.0f32, f32::max);
         // Carry underline metrics from the first non-empty span. Spans may
         // use different fonts but a single line only has one underline, so
         // the first span wins.
         let (underline_offset, underline_thickness) = per_span
             .iter()
-            .map(|(r, _)| (r.underline_offset, r.underline_thickness))
+            .map(|(r, _, _)| (r.underline_offset, r.underline_thickness))
             .find(|(_, t)| *t > 0.0)
             .unwrap_or((0.0, 0.0));
 
@@ -1587,8 +1769,50 @@ impl DocumentFlow {
         let mut spans_out: Vec<LaidOutSpan> = Vec::new();
         let mut pen_x: f32 = 0.0;
         let effective_width = truncate.unwrap_or(total_width);
+        // The rendered text and its links cover every span, including any
+        // the emit loop below stops short of.
+        let mut rendered = String::new();
+        let mut links: Vec<crate::types::LinkGeometry> = Vec::new();
+        let mut flat_offsets: Vec<(usize, usize)> = Vec::with_capacity(per_span.len());
+        if want_geometry {
+            let mut flat_char = 0usize;
+            for (_, _, sp) in &per_span {
+                flat_offsets.push((rendered.len(), flat_char));
+                if let Some(url) = sp.link_url.as_ref() {
+                    links.push(crate::types::LinkGeometry {
+                        rendered_byte_range: rendered.len()..rendered.len() + sp.text.len(),
+                        url: url.clone(),
+                    });
+                }
+                rendered.push_str(&sp.text);
+                flat_char += sp.text.chars().count();
+            }
+        }
+        let mut segments: Vec<crate::types::LineSegment> = Vec::new();
+        let mut clip_x: Option<f32> = None;
 
-        for (r, sp) in &per_span {
+        for (span_idx, (r, g, sp)) in per_span.iter().enumerate() {
+            if want_geometry {
+                let (flat_byte, flat_char) = flat_offsets[span_idx];
+                // A span the clip cut short contributes no geometry: the
+                // caller anchors everything past `clip_x` there instead.
+                if clip_x.is_none() && pen_x + r.width <= effective_width + 0.5 {
+                    for line in &g.lines {
+                        for seg in &line.segments {
+                            let mut seg = seg.clone();
+                            seg.rect[0] += pen_x;
+                            seg.byte_range =
+                                seg.byte_range.start + flat_byte..seg.byte_range.end + flat_byte;
+                            seg.char_range =
+                                seg.char_range.start + flat_char..seg.char_range.end + flat_char;
+                            segments.push(seg);
+                        }
+                    }
+                } else if clip_x.is_none() {
+                    clip_x = Some(pen_x.min(effective_width));
+                }
+            }
+
             let remaining = (effective_width - pen_x).max(0.0);
             let span_visible_width = r.width.min(remaining);
             if span_visible_width <= 0.0 && r.width > 0.0 {
@@ -1635,16 +1859,54 @@ impl DocumentFlow {
             }
         }
 
-        SingleLineResult {
-            width: effective_width,
-            height: line_height,
-            baseline,
-            underline_offset,
-            underline_thickness,
-            glyphs,
-            glyph_keys: all_keys,
-            spans: spans_out,
-        }
+        let geometry = if want_geometry {
+            let total_chars = rendered.chars().count();
+            let end = if rendered.ends_with("\r\n") {
+                crate::types::LineEnd::HardBreak { chars: 2, bytes: 2 }
+            } else if rendered.ends_with('\n') {
+                crate::types::LineEnd::HardBreak { chars: 1, bytes: 1 }
+            } else {
+                crate::types::LineEnd::EndOfText
+            };
+            LayoutGeometry {
+                lines: vec![crate::types::LineGeometry {
+                    index: 0,
+                    byte_range: 0..rendered.len(),
+                    char_range: 0..total_chars,
+                    rect: [0.0, 0.0, effective_width, line_height],
+                    baseline,
+                    caret_x: 0.0,
+                    segments,
+                    end,
+                    // The markup path clips rather than ellipsizing, so the
+                    // "ellipsis" is a zero-width mark at the clip point.
+                    truncation: clip_x.map(|x| LineTruncation {
+                        ellipsis_x: x,
+                        ellipsis_width: 0.0,
+                    }),
+                }],
+                dropped_lines: 0,
+                source_len: rendered.len(),
+                rendered_text: Some(rendered),
+                links,
+            }
+        } else {
+            LayoutGeometry::default()
+        };
+
+        (
+            SingleLineResult {
+                width: effective_width,
+                height: line_height,
+                baseline,
+                underline_offset,
+                underline_thickness,
+                glyphs,
+                glyph_keys: all_keys,
+                spans: spans_out,
+            },
+            geometry,
+        )
     }
 
     /// Paragraph layout with inline markup. Multi-line counterpart
@@ -1660,6 +1922,53 @@ impl DocumentFlow {
         max_lines: Option<usize>,
         raster_scale: f32,
     ) -> ParagraphResult {
+        self.layout_paragraph_markup_inner(
+            service,
+            markup,
+            format,
+            max_width,
+            max_lines,
+            raster_scale,
+            false,
+        )
+        .0
+    }
+
+    /// [`layout_paragraph_markup`](Self::layout_paragraph_markup) plus
+    /// per-line, per-character geometry. See
+    /// [`layout_single_line_markup_with_geometry`](Self::layout_single_line_markup_with_geometry)
+    /// for how the ranges relate to the markup source.
+    pub fn layout_paragraph_markup_with_geometry(
+        &mut self,
+        service: &mut TextFontService,
+        markup: &InlineMarkup,
+        format: &TextFormat,
+        max_width: f32,
+        max_lines: Option<usize>,
+        raster_scale: f32,
+    ) -> (ParagraphResult, LayoutGeometry) {
+        self.layout_paragraph_markup_inner(
+            service,
+            markup,
+            format,
+            max_width,
+            max_lines,
+            raster_scale,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn layout_paragraph_markup_inner(
+        &mut self,
+        service: &mut TextFontService,
+        markup: &InlineMarkup,
+        format: &TextFormat,
+        max_width: f32,
+        max_lines: Option<usize>,
+        raster_scale: f32,
+        want_geometry: bool,
+    ) -> (ParagraphResult, LayoutGeometry) {
         let empty = ParagraphResult {
             width: 0.0,
             height: 0.0,
@@ -1674,7 +1983,7 @@ impl DocumentFlow {
         };
 
         if markup.spans.is_empty() || max_width <= 0.0 {
-            return empty;
+            return (empty, LayoutGeometry::default());
         }
 
         let mut flat = String::new();
@@ -1684,8 +1993,21 @@ impl DocumentFlow {
             flat.push_str(&sp.text);
         }
         if flat.is_empty() {
-            return empty;
+            return (empty, LayoutGeometry::default());
         }
+        let links: Vec<crate::types::LinkGeometry> = markup
+            .spans
+            .iter()
+            .enumerate()
+            .filter_map(|(i, sp)| {
+                let url = sp.link_url.clone()?;
+                let start = span_flat_offsets[i];
+                Some(crate::types::LinkGeometry {
+                    rendered_byte_range: start..start + sp.text.len(),
+                    url,
+                })
+            })
+            .collect();
 
         let base_point_size = format.font_size.map(|s| s as u32);
         let base_resolved = match resolve_font(
@@ -1699,11 +2021,11 @@ impl DocumentFlow {
             1.0, // standalone shaper: caller's explicit size is already theme-scaled
         ) {
             Some(r) => r,
-            None => return empty,
+            None => return (empty, LayoutGeometry::default()),
         };
         let metrics = match font_metrics_px(&service.font_registry, &base_resolved) {
             Some(m) => m,
-            None => return empty,
+            None => return (empty, LayoutGeometry::default()),
         };
 
         let mut all_runs: Vec<ShapedRun> = Vec::new();
@@ -1752,7 +2074,7 @@ impl DocumentFlow {
         }
 
         if all_runs.is_empty() {
-            return empty;
+            return (empty, LayoutGeometry::default());
         }
 
         let hyphenator = format.hyphenation.and_then(|h| {
@@ -1830,18 +2152,34 @@ impl DocumentFlow {
             y_top += line_height;
         }
 
-        ParagraphResult {
-            width: max_line_width,
-            height: y_top,
-            baseline_first,
-            line_count,
-            line_height,
-            underline_offset: metrics.underline_offset,
-            underline_thickness: metrics.stroke_size,
-            glyphs: glyphs_out,
-            glyph_keys: keys_out,
-            spans: spans_out,
-        }
+        let geometry = if want_geometry {
+            crate::layout::geometry::paragraph_geometry(
+                &lines[..line_count],
+                &flat,
+                line_height,
+                lines.len() - line_count,
+                Some(flat.clone()),
+                links,
+            )
+        } else {
+            LayoutGeometry::default()
+        };
+
+        (
+            ParagraphResult {
+                width: max_line_width,
+                height: y_top,
+                baseline_first,
+                line_count,
+                line_height,
+                underline_offset: metrics.underline_offset,
+                underline_thickness: metrics.stroke_size,
+                glyphs: glyphs_out,
+                glyph_keys: keys_out,
+                spans: spans_out,
+            },
+            geometry,
+        )
     }
 
     // ── Hit testing & character geometry ───────────────────────
@@ -1867,103 +2205,36 @@ impl DocumentFlow {
     /// `char_end` are block-relative character offsets. Returns one
     /// entry per character in the range, with `position` measured
     /// in run-local coordinates (the first character sits at `0`).
+    ///
+    /// Widths come from each character's own advance, so a
+    /// right-to-left character reports a positive width. Deriving them
+    /// from the left-to-right delta between caret stops — as this used
+    /// to — collapsed every RTL character to zero.
     pub fn character_geometry(
         &self,
         block_id: usize,
         char_start: usize,
         char_end: usize,
     ) -> Vec<CharacterGeometry> {
-        // x for `offset` against a sorted, offset-deduped stop list: exact match,
-        // else the nearer of the two bracketing stops (lower offset wins a tie) —
-        // the same rule `LayoutLine::x_for_offset` applies, but O(log n) against a
-        // shared build instead of an O(n) rebuild-and-scan per character.
-        fn x_in_sorted_stops(stops: &[(usize, f32)], offset: usize) -> f32 {
-            if stops.is_empty() {
-                return 0.0;
-            }
-            match stops.binary_search_by_key(&offset, |(o, _)| *o) {
-                Ok(i) => stops[i].1,
-                Err(i) => {
-                    let left = i.checked_sub(1).map(|j| stops[j]);
-                    let right = stops.get(i).copied();
-                    match (left, right) {
-                        (Some((lo, lx)), Some((ro, rx))) => {
-                            if offset.abs_diff(lo) <= ro.abs_diff(offset) {
-                                lx
-                            } else {
-                                rx
-                            }
-                        }
-                        (Some((_, lx)), None) => lx,
-                        (None, Some((_, rx))) => rx,
-                        (None, None) => 0.0,
-                    }
-                }
-            }
-        }
-
-        if char_start >= char_end {
+        let Some(block) = self.flow_layout.blocks.get(&block_id) else {
             return Vec::new();
-        }
-        let block = match self.flow_layout.blocks.get(&block_id) {
-            Some(b) => b,
-            None => return Vec::new(),
         };
+        crate::layout::geometry::character_geometry_over_lines(&block.lines, char_start, char_end)
+    }
 
-        let mut absolute: Vec<(usize, f32)> = Vec::with_capacity(char_end - char_start);
-        for line in &block.lines {
-            if line.char_range.end <= char_start || line.char_range.start >= char_end {
-                continue;
-            }
-            let local_start = char_start.max(line.char_range.start);
-            let local_end = char_end.min(line.char_range.end);
-            // Build the line's caret stops ONCE and index into them, rather than
-            // calling `x_for_offset` per character — which rebuilt the stop list
-            // (O(runs+glyphs), one allocation) every call. The paint pass splits
-            // a spell-checked line into a run per range, so `x_for_offset`-per-char
-            // is O(chars × runs) per line and turns quadratic on a dense document
-            // (this dominated the accessibility rebuild on a Lorem scene with tens
-            // of thousands of ranges). Stable-sort by offset then dedup keeps
-            // the first (leftmost) x per offset.
-            //
-            // At a direction boundary an offset has two stops at different x,
-            // and this deliberately keeps the leftmost rather than following
-            // affinity the way `x_for_offset` now does: these are character
-            // *extents* for a screen reader, which has no caret and so no
-            // affinity to consult. A stable choice matters more than which
-            // side it lands on.
-            let mut stops: Vec<(usize, f32)> =
-                line.caret_stops().iter().map(|s| (s.offset, s.x)).collect();
-            stops.sort_by_key(|(o, _)| *o);
-            stops.dedup_by_key(|(o, _)| *o);
-            for c in local_start..local_end {
-                absolute.push((c, x_in_sorted_stops(&stops, c)));
-            }
-            if local_end == char_end {
-                absolute.push((local_end, x_in_sorted_stops(&stops, local_end)));
-            }
-        }
-
-        if absolute.is_empty() {
+    /// Per-line, per-character geometry for one laid-out block.
+    ///
+    /// `text` is the block's own text — the layout stores char offsets,
+    /// not the string they index, so the caller supplies it and every
+    /// byte range in the result indexes it. Line boxes are relative to
+    /// the block's top edge.
+    pub fn block_line_geometry(&self, block_id: usize, text: &str) -> Vec<LineGeometry> {
+        let Some(block) = self.flow_layout.blocks.get(&block_id) else {
             return Vec::new();
-        }
-
-        absolute.sort_by_key(|(c, _)| *c);
-
-        let base_x = absolute.first().map(|(_, x)| *x).unwrap_or(0.0);
-        let mut out: Vec<CharacterGeometry> = Vec::with_capacity(absolute.len());
-        for window in absolute.windows(2) {
-            let (c, x) = window[0];
-            let (_, x_next) = window[1];
-            if c >= char_end {
-                break;
-            }
-            out.push(CharacterGeometry {
-                position: x - base_x,
-                width: (x_next - x).max(0.0),
-            });
-        }
-        out
+        };
+        crate::layout::geometry::stacked_lines_geometry(&block.lines, text, |_, line| {
+            line.y - line.ascent
+        })
     }
 
     /// Screen-space caret rectangle at a document position with the
