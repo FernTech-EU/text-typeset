@@ -825,7 +825,7 @@ fn render_block_only_for_frame_block_shows_new_glyph() {
     for y in (0..(h as i32)).step_by(2) {
         if let Some(hit) = ts.hit_test(60.0, y as f32) {
             // block_visual_info returns None for frame-internal blocks
-            if ts.block_visual_info(hit.block_id).is_none() {
+            if !ts.is_top_level_block(hit.block_id) {
                 bq_pos = Some(hit.position);
                 bq_block_id = Some(hit.block_id);
                 break;
@@ -882,7 +882,7 @@ fn cursor_reaches_all_positions_in_frame_block_after_insert() {
     let mut bq_block_id = None;
     for y in (0..(h as i32)).step_by(2) {
         if let Some(hit) = ts.hit_test(60.0, y as f32)
-            && ts.block_visual_info(hit.block_id).is_none()
+            && !ts.is_top_level_block(hit.block_id)
         {
             bq_pos = Some(hit.position);
             bq_block_id = Some(hit.block_id);
@@ -1005,7 +1005,7 @@ fn frame_block_wrapping_after_insert_grows_frame() {
     let mut bq_block_id = None;
     for y in (0..(h as i32)).step_by(2) {
         if let Some(hit) = ts.hit_test(60.0, y as f32)
-            && ts.block_visual_info(hit.block_id).is_none()
+            && !ts.is_top_level_block(hit.block_id)
         {
             bq_pos = Some(hit.position);
             bq_block_id = Some(hit.block_id);
@@ -1080,7 +1080,7 @@ fn frame_block_relayout_preserves_line_structure() {
     let mut bq_block_id = None;
     for y in (0..(h as i32)).step_by(2) {
         if let Some(hit) = ts.hit_test(60.0, y as f32)
-            && ts.block_visual_info(hit.block_id).is_none()
+            && !ts.is_top_level_block(hit.block_id)
         {
             bq_block_id = Some(hit.block_id);
             break;
@@ -1145,7 +1145,7 @@ fn render_block_only_frame_grows_on_wrap() {
     let mut bq_pos = None;
     for y in (0..(h as i32)).step_by(2) {
         if let Some(hit) = ts.hit_test(60.0, y as f32)
-            && ts.block_visual_info(hit.block_id).is_none()
+            && !ts.is_top_level_block(hit.block_id)
         {
             bq_pos = Some(hit.position);
             break;
@@ -1209,7 +1209,7 @@ fn caret_rect_stays_in_frame_after_insert() {
     let mut frame_block_pos = None;
     for y in (0..(h as i32)).step_by(2) {
         if let Some(hit) = ts.hit_test(60.0, y as f32)
-            && ts.block_visual_info(hit.block_id).is_none()
+            && !ts.is_top_level_block(hit.block_id)
         {
             frame_block_pos = Some((hit.position, hit.block_id));
             break;
@@ -1288,7 +1288,7 @@ fn repeated_enter_at_end_of_frame_stays_inside() {
     let mut bq_pos = None;
     for y in (0..(h as i32)).step_by(2) {
         if let Some(hit) = ts.hit_test(60.0, y as f32)
-            && ts.block_visual_info(hit.block_id).is_none()
+            && !ts.is_top_level_block(hit.block_id)
         {
             bq_pos = Some(hit.position);
             break;
@@ -1318,7 +1318,7 @@ fn repeated_enter_at_end_of_frame_stays_inside() {
         let hy = rect[1] + rect[3] * 0.5;
         if let Some(hit) = ts.hit_test(hx, hy) {
             assert!(
-                ts.block_visual_info(hit.block_id).is_none(),
+                !ts.is_top_level_block(hit.block_id),
                 "{}: cursor at pos {} landed on top-level block {} instead of frame block. \
                  caret_rect={:?}",
                 label,
@@ -1647,4 +1647,74 @@ fn typing_in_all_table_cells_keeps_caret_inside_cell() {
         }
         panic!("block_id {} not found in flow snapshot", block_id);
     }
+}
+
+/// A block inside a frame reports its geometry by id, in document space, and
+/// with the frame's own left origin.
+///
+/// This is the door an accessibility walk reads a blockquote's text through:
+/// a frame block that answers `None` here is a paragraph no screen reader can
+/// see, because there is no other way to reach its lines by block id.
+#[test]
+fn a_frame_block_reports_its_geometry_in_document_space() {
+    let doc = TextDocument::new();
+    let op = doc
+        .set_markdown("Before\n\n> Quoted line\n\nAfter\n")
+        .unwrap();
+    op.wait().unwrap();
+
+    let mut ts = make_typesetter();
+    ts.set_viewport(400.0, 600.0);
+    let flow = doc.snapshot_flow();
+    ts.layout_full(&flow);
+    ts.render();
+
+    // Find the frame's block by hit-testing down the document for the first
+    // block that is not in the document's own column.
+    let h = ts.content_height();
+    let mut quoted = None;
+    for y in (0..(h as i32)).step_by(2) {
+        if let Some(hit) = ts.hit_test(60.0, y as f32)
+            && !ts.is_top_level_block(hit.block_id)
+        {
+            quoted = Some(hit.block_id);
+            break;
+        }
+    }
+    let quoted = quoted.expect("the blockquote's block");
+
+    let info = ts
+        .block_visual_info(quoted)
+        .expect("a frame's block must report its visual geometry");
+    assert!(
+        info.x > 0.0,
+        "a blockquote is indented, so its block's origin is not the \
+         document's left edge: got x = {}",
+        info.x
+    );
+
+    // It sits between the two surrounding top-level blocks.
+    let lines = ts.block_line_geometry(quoted, "Quoted line");
+    assert!(
+        !lines.is_empty(),
+        "a frame block must report its line geometry, or its text cannot be \
+         turned into accessibility text runs"
+    );
+
+    let mut tops: Vec<f32> = Vec::new();
+    for y in (0..(h as i32)).step_by(2) {
+        if let Some(hit) = ts.hit_test(60.0, y as f32)
+            && let Some(i) = ts.block_visual_info(hit.block_id)
+            && !tops.contains(&i.y)
+        {
+            tops.push(i.y);
+        }
+    }
+    let mut sorted = tops.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(
+        tops, sorted,
+        "walking down the page must meet blocks in increasing document y, \
+         frame blocks included: {tops:?}"
+    );
 }

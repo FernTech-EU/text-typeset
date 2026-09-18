@@ -42,7 +42,7 @@ fn is_cursor_in_frame(ts: &mut Typesetter, cursor_pos: usize) -> bool {
     let hx = rect[0].max(1.0);
     let hy = rect[1] + rect[3] * 0.5;
     if let Some(hit) = ts.hit_test(hx, hy) {
-        ts.block_visual_info(hit.block_id).is_none()
+        !ts.is_top_level_block(hit.block_id)
     } else {
         false
     }
@@ -133,7 +133,7 @@ fn debug_phase4_frame_blocks() {
 
     for y_step in (0..(content_h as i32)).step_by(4) {
         if let Some(hit) = ts.hit_test(60.0, y_step as f32)
-            && ts.block_visual_info(hit.block_id).is_none()
+            && !ts.is_top_level_block(hit.block_id)
             && !seen_blocks.contains(&hit.block_id)
         {
             seen_blocks.push(hit.block_id);

@@ -289,12 +289,48 @@ pub struct CursorDisplay {
 
 // ── Scrolling ───────────────────────────────────────────────────
 
+/// Visual position and size of a laid-out table, and of its rows and
+/// columns.
+///
+/// Returned by [`crate::DocumentFlow::table_visual_info`]. `x` / `y` are the
+/// document-space top-left of the whole table box; `column_xs` and `row_ys`
+/// are measured from that origin, so cell `(r, c)` occupies
+/// `(x + column_xs[c], y + row_ys[r], column_content_widths[c], row_heights[r])`.
+pub struct TableVisualInfo {
+    /// Table ID (matches `TableSnapshot::table_id`).
+    pub table_id: usize,
+    /// Document-space x of the table box's left edge, in pixels.
+    pub x: f32,
+    /// Document-space y of the table box's top edge, in pixels.
+    pub y: f32,
+    /// Total width of the table, in pixels.
+    pub width: f32,
+    /// Total height of the table including borders, in pixels.
+    pub height: f32,
+    /// Left edge of each column's content area, relative to `x`.
+    pub column_xs: Vec<f32>,
+    /// Width of each column's content area, in pixels.
+    pub column_content_widths: Vec<f32>,
+    /// Top edge of each row's content area, relative to `y`.
+    pub row_ys: Vec<f32>,
+    /// Height of each row's content area, in pixels.
+    pub row_heights: Vec<f32>,
+}
+
 /// Visual position and size of a laid-out block.
 ///
 /// Returned by [`crate::DocumentFlow::block_visual_info`].
 pub struct BlockVisualInfo {
     /// Block ID (matches `BlockSnapshot::block_id`).
     pub block_id: usize,
+    /// X position of the left edge of the block's content column, relative to
+    /// the document start, in pixels.
+    ///
+    /// Zero for a block in the document's own column. A block inside a table
+    /// cell or a frame has its own left origin — column 1 of a table does not
+    /// start at the document's left edge — so anything placing a rectangle
+    /// around the block's text has to start here rather than at zero.
+    pub x: f32,
     /// Y position of the block's top edge relative to the document start, in pixels.
     pub y: f32,
     /// Total height of the block including margins, in pixels.

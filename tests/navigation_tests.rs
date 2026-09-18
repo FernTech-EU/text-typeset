@@ -421,7 +421,7 @@ fn is_cursor_in_frame(ts: &mut Typesetter, cursor_pos: usize) -> bool {
     let hy = rect[1] + rect[3] * 0.5;
     if let Some(hit) = ts.hit_test(hx, hy) {
         // Frame-internal blocks return None from block_visual_info
-        ts.block_visual_info(hit.block_id).is_none()
+        !ts.is_top_level_block(hit.block_id)
     } else {
         false
     }
@@ -604,7 +604,7 @@ fn phase_repeated_enter_in_frames(doc: &TextDocument, ts: &mut Typesetter) {
 
     for y_step in (0..(content_h as i32)).step_by(4) {
         if let Some(hit) = ts.hit_test(60.0, y_step as f32)
-            && ts.block_visual_info(hit.block_id).is_none()
+            && !ts.is_top_level_block(hit.block_id)
             && !ts.is_block_in_table(hit.block_id)
             && !seen_blocks.contains(&hit.block_id)
         {

@@ -594,6 +594,9 @@ impl Typesetter {
     pub fn is_block_in_table(&self, block_id: usize) -> bool {
         self.flow.is_block_in_table(block_id)
     }
+    pub fn is_top_level_block(&self, block_id: usize) -> bool {
+        self.flow.is_top_level_block(block_id)
+    }
     pub fn scroll_to_position(&mut self, position: usize) -> f32 {
         self.flow.scroll_to_position(position)
     }

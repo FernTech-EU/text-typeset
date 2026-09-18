@@ -100,7 +100,7 @@ pub use types::{
     DecorationRect, FontFaceId, FontFeature, GeometryDirection, GlyphQuad, HitRegion,
     HitTestResult, Hyphenation, ImageQuad, LaidOutSpan, LaidOutSpanKind, LayoutGeometry, LineEnd,
     LineGeometry, LineSegment, LineTruncation, LinkGeometry, ParagraphResult, RenderFrame,
-    SingleLineResult, TextFormat, UnderlineStyle, VerticalAlignment,
+    SingleLineResult, TableVisualInfo, TextFormat, UnderlineStyle, VerticalAlignment,
 };
 
 pub use document_flow::{ContentWidthMode, DocumentFlow, RelayoutError, quantize_raster_scale};

@@ -58,7 +58,7 @@ use crate::shaping::shaper::{
 use crate::types::{
     BlockVisualInfo, CharacterGeometry, CursorDisplay, DecorationKind, DecorationRect, GlyphQuad,
     HitTestResult, LaidOutSpan, LaidOutSpanKind, LayoutGeometry, LineGeometry, LineTruncation,
-    ParagraphResult, RenderFrame, SingleLineResult, TextFormat,
+    ParagraphResult, RenderFrame, SingleLineResult, TableVisualInfo, TextFormat,
 };
 
 /// Reasons [`DocumentFlow::relayout_block`] may refuse an
@@ -2216,10 +2216,14 @@ impl DocumentFlow {
         char_start: usize,
         char_end: usize,
     ) -> Vec<CharacterGeometry> {
-        let Some(block) = self.flow_layout.blocks.get(&block_id) else {
+        let Some(resolved) = self.flow_layout.resolve_block(block_id) else {
             return Vec::new();
         };
-        crate::layout::geometry::character_geometry_over_lines(&block.lines, char_start, char_end)
+        crate::layout::geometry::character_geometry_over_lines(
+            &resolved.block.lines,
+            char_start,
+            char_end,
+        )
     }
 
     /// Per-line, per-character geometry for one laid-out block.
@@ -2229,10 +2233,10 @@ impl DocumentFlow {
     /// byte range in the result indexes it. Line boxes are relative to
     /// the block's top edge.
     pub fn block_line_geometry(&self, block_id: usize, text: &str) -> Vec<LineGeometry> {
-        let Some(block) = self.flow_layout.blocks.get(&block_id) else {
+        let Some(resolved) = self.flow_layout.resolve_block(block_id) else {
             return Vec::new();
         };
-        crate::layout::geometry::stacked_lines_geometry(&block.lines, text, |_, line| {
+        crate::layout::geometry::stacked_lines_geometry(&resolved.block.lines, text, |_, line| {
             line.y - line.ascent
         })
     }
@@ -2407,11 +2411,12 @@ impl DocumentFlow {
     }
 
     pub fn block_visual_info(&self, block_id: usize) -> Option<BlockVisualInfo> {
-        let block = self.flow_layout.blocks.get(&block_id)?;
+        let resolved = self.flow_layout.resolve_block(block_id)?;
         Some(BlockVisualInfo {
             block_id,
-            y: block.y,
-            height: block.height,
+            x: resolved.origin_x,
+            y: resolved.origin_y + resolved.block.y,
+            height: resolved.block.height,
         })
     }
 
@@ -2605,6 +2610,66 @@ impl DocumentFlow {
             .iter()
             .filter(|l| offset >= l.char_range.start && offset <= l.char_range.end)
             .any(|l| l.is_direction_boundary(offset))
+    }
+
+    /// Visual geometry of a laid-out table — the table box plus its row and
+    /// column tracks — in document space.
+    ///
+    /// Answers for a table at the top level or inside a frame at any depth.
+    /// `None` when no table with that id is laid out, which is also what an
+    /// unlaid-out document returns.
+    pub fn table_visual_info(&self, table_id: usize) -> Option<TableVisualInfo> {
+        let resolved = self.flow_layout.resolve_table(table_id)?;
+        Some(TableVisualInfo {
+            table_id,
+            x: resolved.origin_x,
+            y: resolved.origin_y,
+            width: resolved.table.total_width,
+            height: resolved.table.total_height,
+            column_xs: resolved.table.column_xs.clone(),
+            column_content_widths: resolved.table.column_content_widths.clone(),
+            row_ys: resolved.table.row_ys.clone(),
+            row_heights: resolved.table.row_heights.clone(),
+        })
+    }
+
+    /// A block's visual geometry and its per-line geometry in one lookup.
+    ///
+    /// [`block_visual_info`](Self::block_visual_info) and
+    /// [`block_line_geometry`](Self::block_line_geometry) each have to find
+    /// the block first, and for a block nested in a table cell or a frame that
+    /// search is a walk rather than a hash lookup. A caller that wants both —
+    /// the accessibility walk wants both for every block it emits — should ask
+    /// once.
+    pub fn block_geometry(
+        &self,
+        block_id: usize,
+        text: &str,
+    ) -> Option<(BlockVisualInfo, Vec<LineGeometry>)> {
+        let resolved = self.flow_layout.resolve_block(block_id)?;
+        let info = BlockVisualInfo {
+            block_id,
+            x: resolved.origin_x,
+            y: resolved.origin_y + resolved.block.y,
+            height: resolved.block.height,
+        };
+        let lines = crate::layout::geometry::stacked_lines_geometry(
+            &resolved.block.lines,
+            text,
+            |_, line| line.y - line.ascent,
+        );
+        Some((info, lines))
+    }
+
+    /// Whether `block_id` is laid out in the document's own column, rather
+    /// than nested inside a table cell or a frame.
+    ///
+    /// The nested cases have their own left origin and their own coordinate
+    /// base, so a caller drawing in document space — or one probing which
+    /// kind of block a hit landed in — needs to ask rather than infer it
+    /// from a geometry query coming back empty.
+    pub fn is_top_level_block(&self, block_id: usize) -> bool {
+        self.flow_layout.blocks.contains_key(&block_id)
     }
 
     /// Whether a block lives inside any table cell.

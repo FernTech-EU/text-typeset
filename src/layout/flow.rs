@@ -25,6 +25,122 @@ pub enum FlowItem {
     },
 }
 
+// ── Nested-block resolution ────────────────────────────────────────
+//
+// `blocks` holds only the blocks laid out in the document's own column.
+// A block inside a table cell lives in `TableLayout::cell_layouts`, and one
+// inside a blockquote (or any other frame) lives in `FrameLayout::blocks`,
+// each with coordinates measured from its container rather than from the
+// document. Everything that reasons about a block by id — caret geometry,
+// per-character positions, the accessibility walk — needs to reach those
+// too, and needs to know what to add to get back into document space.
+
+/// A block's layout together with the document-space origin its own
+/// coordinates are measured from.
+///
+/// `block.y` is relative to [`origin_y`](Self::origin_y) and the block's line
+/// geometry is relative to the block, so the absolute top of the block is
+/// `origin_y + block.y`. For a block in the document's own column both
+/// origins are zero and `block.y` is already absolute — which is what keeps
+/// this a widening of the old lookup rather than a change to it.
+pub struct ResolvedBlock<'a> {
+    pub block: &'a BlockLayout,
+    /// Document-space x of the left edge of the block's content column.
+    pub origin_x: f32,
+    /// Document-space y that `block.y` is measured from.
+    pub origin_y: f32,
+}
+
+/// The document-space origin of a table's own coordinate system.
+///
+/// `TableLayout::column_xs` and `row_ys` are measured from here, so cell
+/// `(r, c)` sits at `(origin_x + column_xs[c], origin_y + row_ys[r])`.
+pub struct ResolvedTable<'a> {
+    pub table: &'a TableLayout,
+    pub origin_x: f32,
+    pub origin_y: f32,
+}
+
+fn resolve_block_in_table<'a>(
+    table: &'a TableLayout,
+    block_id: usize,
+    base_x: f32,
+    base_y: f32,
+) -> Option<ResolvedBlock<'a>> {
+    for cell in &table.cell_layouts {
+        if cell.row >= table.row_ys.len() || cell.column >= table.column_xs.len() {
+            continue;
+        }
+        let origin_x = base_x + table.column_xs[cell.column];
+        let origin_y = base_y + table.y + table.row_ys[cell.row];
+        for block in &cell.blocks {
+            if block.block_id == block_id {
+                return Some(ResolvedBlock {
+                    block,
+                    origin_x,
+                    origin_y,
+                });
+            }
+        }
+    }
+    None
+}
+
+fn resolve_block_in_frame<'a>(
+    frame: &'a FrameLayout,
+    block_id: usize,
+    base_x: f32,
+    base_y: f32,
+) -> Option<ResolvedBlock<'a>> {
+    let content_x = base_x + frame.x + frame.content_x;
+    let content_y = base_y + frame.y + frame.content_y;
+    for block in &frame.blocks {
+        if block.block_id == block_id {
+            return Some(ResolvedBlock {
+                block,
+                origin_x: content_x,
+                origin_y: content_y,
+            });
+        }
+    }
+    for table in &frame.tables {
+        if let Some(found) = resolve_block_in_table(table, block_id, content_x, content_y) {
+            return Some(found);
+        }
+    }
+    for nested in &frame.frames {
+        if let Some(found) = resolve_block_in_frame(nested, block_id, content_x, content_y) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn resolve_table_in_frame<'a>(
+    frame: &'a FrameLayout,
+    table_id: usize,
+    base_x: f32,
+    base_y: f32,
+) -> Option<ResolvedTable<'a>> {
+    let content_x = base_x + frame.x + frame.content_x;
+    let content_y = base_y + frame.y + frame.content_y;
+    for table in &frame.tables {
+        if table.table_id == table_id {
+            return Some(ResolvedTable {
+                table,
+                origin_x: content_x,
+                origin_y: content_y + table.y,
+            });
+        }
+    }
+    for nested in &frame.frames {
+        if let Some(found) = resolve_table_in_frame(nested, table_id, content_x, content_y) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 pub struct FlowLayout {
     pub blocks: HashMap<usize, BlockLayout>,
     pub tables: HashMap<usize, TableLayout>,
@@ -1676,4 +1792,52 @@ pub(crate) fn reposition_frame_children(frame: &mut FrameLayout) {
 
     frame.content_height = content_y;
     frame.total_height += content_y - old_content_height;
+}
+
+impl FlowLayout {
+    /// Find a block's layout by id wherever it lives — the document's own
+    /// column, a table cell, or a frame at any depth — with the origin its
+    /// coordinates are measured from.
+    ///
+    /// The flat `blocks` map is tried first, so the common case stays a
+    /// single hash lookup and only a nested block pays for the walk.
+    pub fn resolve_block(&self, block_id: usize) -> Option<ResolvedBlock<'_>> {
+        if let Some(block) = self.blocks.get(&block_id) {
+            return Some(ResolvedBlock {
+                block,
+                origin_x: 0.0,
+                origin_y: 0.0,
+            });
+        }
+        for table in self.tables.values() {
+            if let Some(found) = resolve_block_in_table(table, block_id, 0.0, 0.0) {
+                return Some(found);
+            }
+        }
+        for frame in self.frames.values() {
+            if let Some(found) = resolve_block_in_frame(frame, block_id, 0.0, 0.0) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Find a table's layout by id — at the top level or inside a frame at
+    /// any depth — with the document-space origin `column_xs` / `row_ys` are
+    /// measured from.
+    pub fn resolve_table(&self, table_id: usize) -> Option<ResolvedTable<'_>> {
+        if let Some(table) = self.tables.get(&table_id) {
+            return Some(ResolvedTable {
+                table,
+                origin_x: 0.0,
+                origin_y: table.y,
+            });
+        }
+        for frame in self.frames.values() {
+            if let Some(found) = resolve_table_in_frame(frame, table_id, 0.0, 0.0) {
+                return Some(found);
+            }
+        }
+        None
+    }
 }

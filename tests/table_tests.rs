@@ -230,16 +230,36 @@ fn hit_test_returns_table_cell_blocks() {
         .unwrap();
     assert_eq!(hit.block_id, 12, "hit should find block 12 (Cell one)");
 
-    // This should NOT be found by block_visual_info (it's in a table cell)
+    // A cell's block is not in the document's own column ...
     assert!(
-        ts.block_visual_info(hit.block_id).is_none(),
-        "table cell block should not have block_visual_info"
+        !ts.is_top_level_block(hit.block_id),
+        "table cell block must not be a top-level block"
     );
-
-    // But is_block_in_table should return true
     assert!(
         ts.is_block_in_table(hit.block_id),
         "table cell block should be in table"
+    );
+
+    // ... but its geometry is still reachable by id, in document space, and
+    // anchored on its own column rather than on the document's left edge.
+    // The accessibility walk reads cell text through exactly this door, so a
+    // cell block that answers `None` here is a cell whose text no screen
+    // reader can see.
+    let info = ts
+        .block_visual_info(hit.block_id)
+        .expect("a table cell's block must report its visual geometry");
+    assert!(
+        info.x > 0.0,
+        "a cell block's origin is its column's left edge, not the \
+         document's: got x = {}",
+        info.x
+    );
+    assert!(
+        (info.y - rect[1]).abs() < rect[3],
+        "the cell block's reported top ({}) must agree with the caret \
+         rect it hit-tested to ({})",
+        info.y,
+        rect[1]
     );
 }
 
