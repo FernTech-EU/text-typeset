@@ -8,6 +8,8 @@
 
 Turns rich text documents into GPU-ready glyph quads.
 
+text-typeset is the text pillar of [Teksilo](https://teksilo.rs), FernTech's pure-Rust GUI framework: every label, editor and document view in Teksilo is shaped, laid out and rasterized here. It does not depend on Teksilo and works with any GPU framework.
+
 Typesetting crate for the [text-document](https://github.com/ferntech-eu/text-document) ecosystem. Takes a rich text document model (styled paragraphs, tables, lists, frames) and produces positioned glyph quads, decoration rectangles, and a glyph atlas texture that any GPU framework can render in a few draw calls.
 
 ```text
@@ -34,6 +36,7 @@ Put the service behind whatever smart pointer your host framework uses (an `Rc<R
 - **Glyph rasterization** via [swash](https://crates.io/crates/swash) with color emoji support (COLR/CBDT)
 - **Glyph atlas** backed by [etagere](https://crates.io/crates/etagere) shelf packing with auto-grow and LRU eviction — shared across every widget through the `TextFontService`
 - **Paragraph layout** with line breaking ([icu_segmenter](https://crates.io/crates/icu_segmenter), UAX #14), four alignment modes (left, right, center, justify), and first-line indent
+- **Hyphenation** via [hypher](https://crates.io/crates/hypher), Western European languages by default (`hyphenation-all-languages` for every language hypher ships), plus soft-hyphen breaking
 - **BiDi text** analysis via [unicode-bidi](https://crates.io/crates/unicode-bidi) with per-run directional shaping
 - **Tables** with column width distribution, cell layout, borders, and cell backgrounds
 - **Lists** with marker rendering (bullet, decimal, alpha, roman) at configurable indent levels
@@ -151,16 +154,18 @@ The service cannot reach into per-widget flows, so it cannot clear their layouts
 
 ## Dependencies
 
-| Crate | Version | Purpose |
-| --- | --- | --- |
-| harfrust | 0.7 | OpenType shaping |
-| swash | 0.2 | Font metrics and glyph rasterization |
-| fontdb | 0.23 | Font discovery and CSS-spec matching |
-| etagere | 0.3 | Glyph atlas allocation (shelf packing) |
-| icu_segmenter | 2 | Line break opportunities (UAX #14) |
-| unicode-bidi | 0.3 | Bidirectional text (UAX #9) |
-| thiserror | 2.0 | Error type derivation |
-| text-document | 1.5 | Document model (optional, default feature) |
+| Crate | Purpose |
+| --- | --- |
+| harfrust | OpenType shaping |
+| swash | Font metrics and glyph rasterization |
+| fontdb | Font discovery and CSS-spec matching |
+| ttf-parser | OS/2 and cmap reading for writing-system classification |
+| etagere | Glyph atlas allocation (shelf packing) |
+| icu_segmenter | Line break opportunities (UAX #14) |
+| unicode-bidi | Bidirectional text (UAX #9) |
+| hypher | Hyphenation patterns |
+| thiserror | Error type derivation |
+| text-document | Document model (optional, default feature) |
 
 ## License
 
