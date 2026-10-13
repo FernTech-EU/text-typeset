@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use fontdb::{Database, Family, Query, Source, Style, Weight};
-use harfrust::{FontRef, ShaperData};
 
 use crate::font::writing_system_index::{
     FaceBytes, FaceRef, WritingSystemIndexBuilder, build_from_faces,
@@ -59,13 +58,13 @@ pub struct FontEntry {
     /// system faces as a last resort (see
     /// [`find_fallback_font`](crate::font::resolve::find_fallback_font)).
     pub is_system: bool,
-    /// Lazily-built HarfBuzz shaping tables for this face. `ShaperData`
-    /// preprocesses the font's GSUB/GPOS/cmap tables and is independent
-    /// of any `FontRef` lifetime, so it can be built once and reused
-    /// across every shape call. Built on first shape via
-    /// [`shaper_data`](Self::shaper_data). `OnceLock` keeps `FontEntry`
-    /// `Sync` (its internal caches are atomic).
-    shaper_data: OnceLock<ShaperData>,
+    /// Lazily-opened harfrust font for this face. It shares this entry's
+    /// byte `Arc` (no copy) and caches the preprocessed GSUB/GPOS/cmap
+    /// tables inside itself, so it is opened once and reused across every
+    /// shape call. Built on first shape via
+    /// [`shaping_font`](Self::shaping_font); `None` if the bytes hold no
+    /// usable face. `OnceLock` keeps `FontEntry` `Sync`.
+    shaping_font: OnceLock<Option<harfrust::Font>>,
 }
 
 impl FontEntry {
@@ -74,27 +73,31 @@ impl FontEntry {
     /// system font file can no longer be read (uninstalled mid-session);
     /// shaping then degrades gracefully to `None`/`.notdef`.
     pub fn bytes(&self) -> &[u8] {
+        // Two `as_ref()` hops: Arc<dyn AsRef<[u8]>> → dyn → &[u8].
+        (**self.shared_data()).as_ref()
+    }
+
+    /// The shared byte container, loading it from disk on first use for
+    /// lazily-tracked system faces (see [`bytes`](Self::bytes)).
+    fn shared_data(&self) -> &SharedFontData {
         match &self.data {
-            // Two `as_ref()` hops: Arc<dyn AsRef<[u8]>> → dyn → &[u8].
-            FontData::Resident(data) => (**data).as_ref(),
-            FontData::Lazy { path, cell } => {
-                let arc = cell.get_or_init(|| {
-                    let bytes = std::fs::read(path).unwrap_or_default();
-                    Arc::new(bytes) as SharedFontData
-                });
-                (**arc).as_ref()
-            }
+            FontData::Resident(data) => data,
+            FontData::Lazy { path, cell } => cell.get_or_init(|| {
+                let bytes = std::fs::read(path).unwrap_or_default();
+                Arc::new(bytes) as SharedFontData
+            }),
         }
     }
 
-    /// Borrow this face's shaping tables, building them on first use.
+    /// Borrow this face's harfrust font, opening it on first use.
     ///
-    /// `ShaperData::new` reprocesses the font tables; doing it once per
-    /// face (instead of once per shape call) avoids redundant work on
-    /// every relayout/keystroke. The `font` must refer to this same
-    /// face — callers already hold a `FontRef` opened from `bytes()`.
-    pub fn shaper_data(&self, font: &FontRef) -> &ShaperData {
-        self.shaper_data.get_or_init(|| ShaperData::new(font))
+    /// Opening preprocesses the font tables; doing it once per face
+    /// (instead of once per shape call) avoids redundant work on every
+    /// relayout/keystroke. `None` if the bytes hold no usable face.
+    pub fn shaping_font(&self) -> Option<&harfrust::Font> {
+        self.shaping_font
+            .get_or_init(|| harfrust::Font::new(self.shared_data().clone(), self.face_index))
+            .as_ref()
     }
 }
 
@@ -175,7 +178,7 @@ impl FontRegistry {
                 },
                 swash_cache_key: swash::CacheKey::new(),
                 is_system: true,
-                shaper_data: OnceLock::new(),
+                shaping_font: OnceLock::new(),
             };
             let face_id = FontFaceId(self.fonts.len() as u32);
             self.fonts.push(Some(entry));
@@ -218,7 +221,7 @@ impl FontRegistry {
                 data: FontData::Resident(data.clone()),
                 swash_cache_key,
                 is_system: false,
-                shaper_data: OnceLock::new(),
+                shaping_font: OnceLock::new(),
             };
 
             let face_id = FontFaceId(self.fonts.len() as u32);
@@ -273,7 +276,7 @@ impl FontRegistry {
                     data: FontData::Resident(data.clone()),
                     swash_cache_key,
                     is_system: false,
-                    shaper_data: OnceLock::new(),
+                    shaping_font: OnceLock::new(),
                 };
 
                 let face_id = FontFaceId(self.fonts.len() as u32);

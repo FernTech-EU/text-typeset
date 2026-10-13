@@ -1,4 +1,4 @@
-use harfrust::{Direction, Feature, FontRef, ShapeOptions, Tag, UnicodeBuffer};
+use harfrust::{Buffer, Direction, Feature, ShapeOptions, ShaperFont, Tag};
 
 use crate::font::registry::FontRegistry;
 use crate::font::resolve::ResolvedFont;
@@ -237,7 +237,7 @@ pub fn shape_text_directed(
     features: &[Feature],
 ) -> Option<ShapedRun> {
     let entry = registry.get(resolved.font_face_id)?;
-    let font = FontRef::from_index(entry.bytes(), entry.face_index).ok()?;
+    let font = entry.shaping_font()?;
 
     let upem = units_per_em(entry.bytes(), entry.face_index).unwrap_or(0) as f32;
     if upem == 0.0 {
@@ -250,7 +250,7 @@ pub fn shape_text_directed(
     let physical_scale = physical_size / upem;
     let inv_sf = 1.0 / sf;
 
-    let mut buffer = UnicodeBuffer::new();
+    let mut buffer = Buffer::new();
     buffer.push_str(text);
     match direction {
         TextDirection::LeftToRight => buffer.set_direction(Direction::LeftToRight),
@@ -278,15 +278,18 @@ pub fn shape_text_directed(
         TextDirection::LeftToRight
     };
 
-    // ShaperData preprocesses font tables for shaping. It's built once
-    // per face and cached on the FontEntry, so repeated shape calls
-    // (every relayout/keystroke) reuse the same preprocessed tables.
-    let shaper_data = entry.shaper_data(&font);
-    let shaper = shaper_data.shaper(&font).build();
-    let glyph_buffer = shaper.shape(buffer, ShapeOptions::new().features(features));
+    // The font is opened once per face and cached on the FontEntry, and
+    // it keeps its preprocessed tables, so repeated shape calls (every
+    // relayout/keystroke) reuse them; the ShaperFont over it is cheap.
+    harfrust::shape(
+        &ShaperFont::new(font),
+        &mut buffer,
+        ShapeOptions::new().features(features),
+    )
+    .ok()?;
 
-    let infos = glyph_buffer.glyph_infos();
-    let positions = glyph_buffer.glyph_positions();
+    let infos = buffer.glyph_infos();
+    let positions = buffer.glyph_positions();
 
     let mut glyphs = Vec::with_capacity(infos.len());
     let mut total_advance = 0.0f32;
@@ -338,17 +341,17 @@ pub fn shape_text_directed(
     })
 }
 
-/// Shape a text string, reusing a UnicodeBuffer to avoid allocations.
+/// Shape a text string, reusing a harfrust `Buffer` to avoid allocations.
 pub fn shape_text_with_buffer(
     registry: &FontRegistry,
     resolved: &ResolvedFont,
     text: &str,
     text_offset: usize,
-    buffer: UnicodeBuffer,
+    buffer: Buffer,
     features: &[Feature],
-) -> Option<(ShapedRun, UnicodeBuffer)> {
+) -> Option<(ShapedRun, Buffer)> {
     let entry = registry.get(resolved.font_face_id)?;
-    let font = FontRef::from_index(entry.bytes(), entry.face_index).ok()?;
+    let font = entry.shaping_font()?;
 
     let upem = units_per_em(entry.bytes(), entry.face_index).unwrap_or(0) as f32;
     if upem == 0.0 {
@@ -371,12 +374,15 @@ pub fn shape_text_with_buffer(
         TextDirection::LeftToRight
     };
 
-    let shaper_data = entry.shaper_data(&font);
-    let shaper = shaper_data.shaper(&font).build();
-    let glyph_buffer = shaper.shape(buffer, ShapeOptions::new().features(features));
+    harfrust::shape(
+        &ShaperFont::new(font),
+        &mut buffer,
+        ShapeOptions::new().features(features),
+    )
+    .ok()?;
 
-    let infos = glyph_buffer.glyph_infos();
-    let positions = glyph_buffer.glyph_positions();
+    let infos = buffer.glyph_infos();
+    let positions = buffer.glyph_positions();
 
     let mut glyphs = Vec::with_capacity(infos.len());
     let mut total_advance = 0.0f32;
@@ -427,9 +433,10 @@ pub fn shape_text_with_buffer(
         image_height: 0.0,
     };
 
-    // Reclaim the buffer for reuse
-    let recycled = glyph_buffer.clear();
-    Some((run, recycled))
+    // Reclaim the buffer for reuse: clearing keeps the allocation and
+    // drops the contents and segment properties.
+    buffer.clear();
+    Some((run, buffer))
 }
 
 pub struct FontMetricsPx {
