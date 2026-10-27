@@ -93,6 +93,14 @@ pub fn shape_text_with_fallback(
     Some(run)
 }
 
+/// Whether `glyph` stands for a hard line break of `text`, the text its run was shaped
+/// from.
+fn is_hard_break_glyph(text: &str, glyph: &ShapedGlyph) -> bool {
+    text.get(glyph.cluster as usize..)
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(crate::types::is_hard_break)
+}
+
 /// Lay out every hard line break in `run` as nothing: glyph 0, which is never
 /// drawn, with no advance and no offset (see [`crate::types::is_hard_break`]).
 /// Returns how many there are.
@@ -103,11 +111,7 @@ pub fn shape_text_with_fallback(
 fn blank_hard_breaks(text: &str, run: &mut ShapedRun) -> usize {
     let mut count = 0;
     for glyph in &mut run.glyphs {
-        let is_break = text
-            .get(glyph.cluster as usize..)
-            .and_then(|rest| rest.chars().next())
-            .is_some_and(crate::types::is_hard_break);
-        if is_break {
+        if is_hard_break_glyph(text, glyph) {
             glyph.glyph_id = 0;
             glyph.x_advance = 0.0;
             glyph.x_offset = 0.0;
@@ -148,13 +152,17 @@ fn apply_glyph_fallback(
 ) {
     use crate::font::resolve::find_fallback_font;
 
-    // Maximal spans of consecutive .notdef glyphs, as index ranges.
+    // Maximal spans of consecutive .notdef glyphs, as index ranges. A hard break
+    // is glyph 0 on purpose (see `blank_hard_breaks`) and ends a span: inside one it
+    // would choose the span's font, since a span is re-shaped in the font that draws
+    // its first character, and a character beside it would lose its own.
+    let missing = |glyph: &ShapedGlyph| glyph.glyph_id == 0 && !is_hard_break_glyph(text, glyph);
     let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
     let mut i = 0;
     while i < run.glyphs.len() {
-        if run.glyphs[i].glyph_id == 0 {
+        if missing(&run.glyphs[i]) {
             let start = i;
-            while i < run.glyphs.len() && run.glyphs[i].glyph_id == 0 {
+            while i < run.glyphs.len() && missing(&run.glyphs[i]) {
                 i += 1;
             }
             spans.push(start..i);
@@ -465,6 +473,8 @@ pub fn shape_text_with_buffer(
         image_name: None,
         image_height: 0.0,
     };
+    let mut run = run;
+    blank_hard_breaks(text, &mut run);
 
     // Reclaim the buffer for reuse: clearing keeps the allocation and
     // drops the contents and segment properties.

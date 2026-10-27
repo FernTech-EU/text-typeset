@@ -785,6 +785,14 @@ fn find_line_index_at_y(lines: &[LayoutLine], local_y: f32) -> Option<(usize, &L
 }
 
 fn find_position_in_line(line: &LayoutLine, local_x: f32) -> (usize, HitRegion, Option<String>) {
+    let (offset, region, tooltip) = position_in_line(line, local_x);
+    // Never past the hard break the line ends with: that offset is the next line's.
+    // In a right-to-left line the break is the leftmost glyph, with no width, so a click
+    // left of the text met it first and took its trailing edge.
+    (offset.min(line.caret_end()), region, tooltip)
+}
+
+fn position_in_line(line: &LayoutLine, local_x: f32) -> (usize, HitRegion, Option<String>) {
     for run in &line.runs {
         // Inline image hit detection
         if let Some(ref name) = run.shaped_run.image_name {

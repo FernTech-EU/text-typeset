@@ -91,9 +91,16 @@ impl LayoutLine {
     }
 
     /// Whether the caret at `offset` (in the block's text) can sit on this
-    /// line: from its start to its [`caret_end`](Self::caret_end).
+    /// line: from its start to its end, short of the offset after the hard
+    /// break it ends with, which is the next line's. The offset inside a
+    /// `\r\n` is this line's, drawn at its end.
     pub(crate) fn holds_caret_at(&self, offset: usize) -> bool {
-        offset >= self.char_range.start && offset <= self.caret_end()
+        offset >= self.char_range.start
+            && if self.hard_break_chars > 0 && self.char_range.end > self.char_range.start {
+                offset < self.char_range.end
+            } else {
+                offset <= self.char_range.end
+            }
     }
 
     /// End (exclusive) of the cluster starting at char offset `cluster`:

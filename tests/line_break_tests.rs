@@ -4,19 +4,22 @@
 //! It ends a line, as `\n` always has here, and it is laid out as nothing:
 //! no glyph and no width. A break at the paragraph's end starts an empty
 //! line, a line it ends is not stretched by justification, and the offset
-//! after it is the next line's start alone — for the caret, for a click past
+//! after it is the next line's start alone: for the caret, for a click past
 //! the end of the line before, and for End.
 
 mod helpers;
-use helpers::{make_block, make_typesetter};
+use helpers::{NOTO_ARABIC, NOTO_SANS, Typesetter, make_block, make_typesetter};
 
 use text_typeset::CursorAffinity;
 use text_typeset::LineEnd;
 use text_typeset::TextFormat;
 use text_typeset::font::resolve::resolve_font;
+use text_typeset::layout::block::layout_block;
 use text_typeset::layout::line::LayoutLine;
 use text_typeset::layout::paragraph::{Alignment, RunOrder, break_into_lines};
-use text_typeset::shaping::shaper::{font_metrics_px, shape_text};
+use text_typeset::shaping::shaper::{
+    TextDirection, font_metrics_px, shape_text, shape_text_with_buffer,
+};
 
 const LS: char = '\u{2028}';
 
@@ -36,6 +39,13 @@ fn lines_of(text: &str, width: f32, alignment: Alignment) -> Vec<LayoutLine> {
         None,
         RunOrder::AlreadyVisual,
     )
+}
+
+fn left_edge(line: &LayoutLine) -> f32 {
+    line.runs
+        .iter()
+        .map(|run| run.x)
+        .fold(f32::INFINITY, f32::min)
 }
 
 fn right_edge(line: &LayoutLine) -> f32 {
@@ -84,11 +94,9 @@ fn a_line_ending_in_a_break_keeps_its_alignment() {
     for alignment in [Alignment::Right, Alignment::Center] {
         let with = lines_of(&format!("Signed{LS}Anne"), 400.0, alignment);
         let without = lines_of("Signed", 400.0, alignment);
-        assert_eq!(
-            right_edge(&with[0]),
-            right_edge(&without[0]),
-            "{alignment:?}"
-        );
+        // The left edge: a right-aligned line's right edge is the width's whatever the
+        // line holds.
+        assert_eq!(left_edge(&with[0]), left_edge(&without[0]), "{alignment:?}");
     }
 }
 
@@ -228,4 +236,159 @@ fn end_stops_before_the_break() {
         assert_eq!(ts.visual_line_range_at(4, affinity), Some((4, 7)));
         assert_eq!(ts.visual_line_range_at(8, affinity), Some((8, 8)));
     }
+}
+
+// ── What the reviews found ──────────────────────────────────────
+
+const KATABA: &str = "\u{0643}\u{062A}\u{0628}";
+const SALAAM: &str = "\u{0633}\u{0644}\u{0627}\u{0645}";
+
+/// Arabic first, Latin beside it, so fallback covers both.
+fn bilingual() -> Typesetter {
+    let mut ts = Typesetter::new();
+    let arabic = ts.register_font(NOTO_ARABIC);
+    ts.register_font(NOTO_SANS);
+    ts.set_default_font(arabic, 16.0);
+    ts.set_viewport(800.0, 600.0);
+    ts
+}
+
+/// Latin first, Arabic as its fallback.
+fn bilingual_latin_first() -> Typesetter {
+    let mut ts = Typesetter::new();
+    let latin = ts.register_font(NOTO_SANS);
+    ts.register_font(NOTO_ARABIC);
+    ts.set_default_font(latin, 16.0);
+    ts
+}
+
+/// A line separator stays inside the right-to-left run it sits in (it is bidi class
+/// WS), and the run's glyphs are stored in visual order: walked that way, the break
+/// mapped to the run's first glyph and was never taken. Shift+Enter did nothing in
+/// Arabic or Hebrew.
+#[test]
+fn a_line_separator_breaks_a_right_to_left_paragraph() {
+    let ts = bilingual();
+    let mut params = make_block(0, &format!("{KATABA}{LS}{SALAAM}"));
+    params.base_direction = TextDirection::RightToLeft;
+    let layout = layout_block(ts.font_registry(), &params, 600.0, 1.0, 1.0);
+    let ranges: Vec<_> = layout.lines.iter().map(|l| l.char_range.clone()).collect();
+    assert_eq!(ranges, [0..4, 4..8]);
+    assert_eq!(layout.lines[0].hard_break_chars, 1);
+}
+
+/// A wrapped right-to-left paragraph sets its words down in reading order. Its first
+/// line held its last words, and its last line claimed the whole paragraph.
+#[test]
+fn a_wrapped_right_to_left_paragraph_keeps_its_reading_order() {
+    let ts = bilingual();
+    let text = vec![SALAAM; 30].join(" ");
+    let mut params = make_block(0, &text);
+    params.base_direction = TextDirection::RightToLeft;
+    let layout = layout_block(ts.font_registry(), &params, 140.0, 1.0, 1.0);
+    assert!(layout.lines.len() > 2);
+    assert_eq!(layout.lines[0].char_range.start, 0);
+    for pair in layout.lines.windows(2) {
+        assert_eq!(pair[0].char_range.end, pair[1].char_range.start);
+    }
+    assert_eq!(
+        layout.lines.last().map(|l| l.char_range.end),
+        Some(text.chars().count())
+    );
+}
+
+/// A line ending in a break before a right-to-left line: the next line's first glyph
+/// carries its last character, which the line before took its end from.
+#[test]
+fn a_break_before_a_right_to_left_line_ends_its_line() {
+    let ts = bilingual();
+    let mut params = make_block(0, &format!("abc{LS}{KATABA}"));
+    params.base_direction = TextDirection::LeftToRight;
+    let layout = layout_block(ts.font_registry(), &params, 600.0, 1.0, 1.0);
+    assert_eq!(layout.lines[0].char_range, 0..4);
+    assert_eq!(layout.lines[0].hard_break_chars, 1);
+}
+
+/// A click left of a right-to-left line ending in a break: the break is that line's
+/// leftmost glyph, with no width, and the click took its far edge, the next line's start.
+#[test]
+fn a_click_left_of_a_right_to_left_line_stays_on_it() {
+    let mut ts = bilingual();
+    let mut params = make_block(1, &format!("{KATABA}{LS}{SALAAM}"));
+    params.base_direction = TextDirection::RightToLeft;
+    ts.layout_blocks(vec![params]);
+    ts.render();
+    let first = ts.caret_rect_with_affinity(0, CursorAffinity::Downstream);
+    let hit = ts
+        .hit_test(5.0, first[1] + first[3] / 2.0)
+        .expect("a hit on the first line");
+    assert_eq!(hit.position, 3);
+}
+
+/// The offset inside a `\r\n` belongs to the line the break ends, and has a caret
+/// there: it belonged to no line, and its caret fell back to another block's.
+#[test]
+fn the_offset_inside_a_crlf_has_a_caret_on_its_line() {
+    let mut ts = make_typesetter();
+    ts.set_viewport(800.0, 600.0);
+    ts.layout_blocks(vec![make_block(1, "abc\r\ndef")]);
+    ts.render();
+    let end = ts.caret_rect_with_affinity(3, CursorAffinity::Downstream);
+    let inside = ts.caret_rect_with_affinity(4, CursorAffinity::Downstream);
+    let next = ts.caret_rect_with_affinity(5, CursorAffinity::Downstream);
+    assert_eq!(inside[1], end[1]);
+    assert!(next[1] > end[1] + 1.0);
+    assert_eq!(
+        ts.visual_line_range_at(4, CursorAffinity::Downstream),
+        Some((0, 3))
+    );
+}
+
+/// Letter spacing leaves a break at no width: spaced, it pushed a right-aligned line
+/// ending in one off its place.
+#[test]
+fn letter_spacing_gives_a_break_no_width() {
+    let ts = make_typesetter();
+    let width = |text: &str| {
+        let mut params = make_block(0, text);
+        for fragment in &mut params.fragments {
+            fragment.letter_spacing = 5.0;
+        }
+        layout_block(ts.font_registry(), &params, 600.0, 1.0, 1.0).lines[0].width
+    };
+    assert_eq!(width(&format!("Signed{LS}Anne")), width("Signed"));
+}
+
+/// A break beside a character the primary font lacks leaves that character its own
+/// fallback font: in one span with the break, the span took the break's font.
+#[test]
+fn a_break_does_not_take_its_neighbours_fallback_font() {
+    let ts = bilingual_latin_first();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
+    let text = format!("a{LS}{SALAAM}");
+    let run = shape_text(ts.font_registry(), &resolved, &text, 0).unwrap();
+    let arabic: Vec<_> = run.glyphs.iter().filter(|g| g.cluster >= 4).collect();
+    assert!(!arabic.is_empty());
+    let ids: Vec<u16> = run.glyphs.iter().map(|g| g.glyph_id).collect();
+    assert!(arabic.iter().all(|g| g.glyph_id != 0), "{ids:?}");
+}
+
+/// Every shaping entry point lays a break out as nothing.
+#[test]
+fn shaping_with_a_recycled_buffer_blanks_a_break_too() {
+    let ts = make_typesetter();
+    let resolved =
+        resolve_font(ts.font_registry(), None, None, None, None, None, 1.0, 1.0).unwrap();
+    let (run, _) = shape_text_with_buffer(
+        ts.font_registry(),
+        &resolved,
+        &format!("a{LS}b"),
+        0,
+        harfrust::Buffer::new(),
+        &[],
+    )
+    .unwrap();
+    let separator = run.glyphs.iter().find(|g| g.cluster == 1).unwrap();
+    assert_eq!((separator.glyph_id, separator.x_advance), (0, 0.0));
 }

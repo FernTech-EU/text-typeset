@@ -690,6 +690,15 @@ fn recolor_run_into(
 fn apply_spacing(run: &mut ShapedRun, text: &str, letter_spacing: f32, word_spacing: f32) {
     let mut extra_advance = 0.0f32;
     for glyph in &mut run.glyphs {
+        // A hard break takes no space, tracked or not: spaced, it pushed a right-aligned
+        // or centred line ending in one off its place by the tracking.
+        let is_break = text
+            .get(glyph.cluster as usize..)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(crate::types::is_hard_break);
+        if is_break {
+            continue;
+        }
         glyph.x_advance += letter_spacing;
         extra_advance += letter_spacing;
 

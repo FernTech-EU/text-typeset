@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::OnceLock;
 
@@ -321,8 +321,9 @@ pub fn break_into_lines(
         return vec![make_empty_line(metrics, 0..0, empty_caret_x)];
     }
 
-    // Flatten all glyphs into a single sequence with their run association
-    let flat = flatten_runs(&runs);
+    // Flatten all glyphs into a single sequence with their run association, in
+    // logical order when the runs come in logical order (see `flatten_runs`).
+    let flat = flatten_runs(&runs, matches!(run_order, RunOrder::Logical(_)));
     if flat.is_empty() {
         return vec![make_empty_line(metrics, 0..0, empty_caret_x)];
     }
@@ -362,8 +363,9 @@ pub fn break_into_lines(
         let glyph_advance = flat[i].x_advance;
         line_width += glyph_advance;
 
-        // Check for mandatory break — O(1) HashSet lookup
-        let is_mandatory = mandatory_breaks.contains(&(i + 1));
+        // Check for mandatory break — O(1) lookup — and where it falls in the text.
+        let mandatory_at = mandatory_breaks.get(&(i + 1)).copied();
+        let is_mandatory = mandatory_at.is_some();
 
         let exceeds_width = line_width > effective_width && line_start_glyph < i;
 
@@ -393,6 +395,7 @@ pub fn break_into_lines(
                 metrics,
                 indent,
                 text,
+                if is_mandatory { mandatory_at } else { None },
             );
             if needs_hyphen && let Some(h) = &hyphenator {
                 append_hyphen(&mut line, &h.glyph);
@@ -440,6 +443,7 @@ pub fn break_into_lines(
                 0.0
             },
             text,
+            None,
         );
         lines.push(line);
         hard_ends.push(false);
@@ -565,20 +569,39 @@ struct FlatGlyph {
     glyph_index_in_run: usize,
 }
 
-fn flatten_runs(runs: &[ShapedRun]) -> Vec<FlatGlyph> {
+/// The glyphs of `runs` as one sequence, each with its run and its index in it.
+///
+/// With `logical`, the runs arrive in logical order and so does the sequence: a
+/// right-to-left run's glyphs, which shaping stores in visual order (its last
+/// character first), are walked from its end. Line breaking reads the sequence as the
+/// text runs, so walked visually such a run was broken from its logical end: a wrapped
+/// right-to-left paragraph set its last words on its first line, and a break inside
+/// one (a line separator, which stays in the run it sits in) mapped to its first
+/// glyph and was never taken. A line still takes a contiguous slice of each run's
+/// glyphs, since the logical stretch of a run is a contiguous stretch of it visually.
+fn flatten_runs(runs: &[ShapedRun], logical: bool) -> Vec<FlatGlyph> {
     let mut flat = Vec::new();
     for (run_idx, run) in runs.iter().enumerate() {
         // Offset cluster values from fragment-text space to block-text space.
         // rustybuzz assigns clusters as byte offsets within the fragment text (0-based),
         // but unicode-linebreak returns byte offsets in the full block text.
         let cluster_offset = run.text_range.start as u32;
-        for (glyph_idx, glyph) in run.glyphs.iter().enumerate() {
+        let push = |flat: &mut Vec<FlatGlyph>, glyph_idx: usize| {
             flat.push(FlatGlyph {
-                x_advance: glyph.x_advance,
-                cluster: glyph.cluster + cluster_offset,
+                x_advance: run.glyphs[glyph_idx].x_advance,
+                cluster: run.glyphs[glyph_idx].cluster + cluster_offset,
                 run_index: run_idx,
                 glyph_index_in_run: glyph_idx,
             });
+        };
+        if logical && run.direction == TextDirection::RightToLeft {
+            for glyph_idx in (0..run.glyphs.len()).rev() {
+                push(&mut flat, glyph_idx);
+            }
+        } else {
+            for glyph_idx in 0..run.glyphs.len() {
+                push(&mut flat, glyph_idx);
+            }
         }
     }
     flat
@@ -588,13 +611,14 @@ fn flatten_runs(runs: &[ShapedRun]) -> Vec<FlatGlyph> {
 /// Both `flat` (by cluster) and `breaks` (by byte offset) are sorted,
 /// so a single O(b + m) pass replaces the previous O(b × m) approach.
 ///
-/// Returns (break_points: HashSet<glyph_idx>, mandatory_breaks: HashSet<glyph_idx>).
+/// Returns (break_points: HashSet<glyph_idx>, mandatory_breaks: glyph_idx → the byte
+/// offset of the break in the text).
 fn map_breaks_to_glyph_indices(
     flat: &[FlatGlyph],
     breaks: &[(usize, BreakOpportunity)],
-) -> (HashSet<usize>, HashSet<usize>) {
+) -> (HashSet<usize>, HashMap<usize, usize>) {
     let mut break_points = HashSet::new();
-    let mut mandatory_breaks = HashSet::new();
+    let mut mandatory_breaks = HashMap::new();
     let mut glyph_cursor = 0usize;
 
     for &(byte_offset, opportunity) in breaks {
@@ -609,7 +633,7 @@ fn map_breaks_to_glyph_indices(
         };
         break_points.insert(glyph_idx);
         if opportunity == BreakOpportunity::Mandatory {
-            mandatory_breaks.insert(glyph_idx);
+            mandatory_breaks.insert(glyph_idx, byte_offset);
         }
     }
 
@@ -617,6 +641,12 @@ fn map_breaks_to_glyph_indices(
 }
 
 /// Build a LayoutLine from a glyph range within the flat sequence.
+///
+/// `hard_end` is where a hard break the line ends at falls in the text, the byte
+/// after the break: the line's text ends there. Read from the next glyph instead, it
+/// overshot into the next line when that one opens with a right-to-left run, whose
+/// first glyph carries its *last* cluster, and the break was lost.
+#[allow(clippy::too_many_arguments)]
 fn build_line(
     runs: &[ShapedRun],
     flat: &[FlatGlyph],
@@ -625,61 +655,25 @@ fn build_line(
     metrics: &FontMetricsPx,
     indent: f32,
     text: &str,
+    hard_end: Option<usize>,
 ) -> LayoutLine {
-    // Group consecutive glyphs by run_index to reconstruct PositionedRuns
+    // Group consecutive glyphs by run_index to reconstruct PositionedRuns. A group is
+    // a contiguous slice of its run's glyphs, walked forwards, or backwards for a
+    // right-to-left run laid out in logical order (see `flatten_runs`), so its slice is
+    // the span of the indices it holds.
     let mut positioned_runs = Vec::new();
     let mut x = indent;
-    let mut current_run_idx: Option<usize> = None;
-    let mut run_glyph_start = 0usize;
-
-    for i in start..end {
-        let fg = &flat[i];
-        if current_run_idx != Some(fg.run_index) {
-            // Emit previous run segment if any
-            if let Some(prev_run_idx) = current_run_idx {
-                // End of previous run: use the last glyph we saw from that run
-                let prev_end = if i > start {
-                    flat[i - 1].glyph_index_in_run + 1
-                } else {
-                    run_glyph_start
-                };
-                let sub_run = extract_sub_run(runs, prev_run_idx, run_glyph_start, prev_end);
-                if let Some((pr, advance)) = sub_run {
-                    positioned_runs.push(PositionedRun {
-                        decorations: RunDecorations {
-                            underline_style: pr.underline_style,
-                            overline: pr.overline,
-                            strikeout: pr.strikeout,
-                            is_link: pr.is_link,
-                            foreground_color: pr.foreground_color,
-                            underline_color: pr.underline_color,
-                            background_color: pr.background_color,
-                            anchor_href: pr.anchor_href.clone(),
-                            tooltip: pr.tooltip.clone(),
-                            vertical_alignment: pr.vertical_alignment,
-                        },
-                        shaped_run: pr,
-                        x,
-                    });
-                    x += advance;
-                }
-            }
-            current_run_idx = Some(fg.run_index);
-            run_glyph_start = fg.glyph_index_in_run;
+    let mut i = start;
+    while i < end {
+        let run_idx = flat[i].run_index;
+        let (mut lo, mut hi) = (flat[i].glyph_index_in_run, flat[i].glyph_index_in_run);
+        let mut j = i + 1;
+        while j < end && flat[j].run_index == run_idx {
+            lo = lo.min(flat[j].glyph_index_in_run);
+            hi = hi.max(flat[j].glyph_index_in_run);
+            j += 1;
         }
-    }
-
-    // Emit final run segment
-    if let Some(run_idx) = current_run_idx {
-        let end_in_run = if end < flat.len() && flat[end].run_index == run_idx {
-            flat[end].glyph_index_in_run
-        } else if end > start {
-            flat[end - 1].glyph_index_in_run + 1
-        } else {
-            run_glyph_start
-        };
-        let sub_run = extract_sub_run(runs, run_idx, run_glyph_start, end_in_run);
-        if let Some((pr, advance)) = sub_run {
+        if let Some((pr, advance)) = extract_sub_run(runs, run_idx, lo, hi + 1) {
             positioned_runs.push(PositionedRun {
                 decorations: RunDecorations {
                     underline_style: pr.underline_style,
@@ -698,6 +692,7 @@ fn build_line(
             });
             x += advance;
         }
+        i = j;
     }
 
     let width = x - indent;
@@ -715,7 +710,9 @@ fn build_line(
         .map(|g| g.cluster as usize)
         .min()
         .unwrap_or(0);
-    let byte_end = if end >= flat.len() {
+    let byte_end = if let Some(hard_end) = hard_end {
+        hard_end
+    } else if end >= flat.len() {
         // Last glyph reaches the end of the input text. Always snap to the
         // full length: a trailing ligature glyph may cover several source
         // chars, so `max_cluster + 1` would be wrong.
