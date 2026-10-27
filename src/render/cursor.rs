@@ -290,7 +290,7 @@ fn selection_rects_for_block(
         // so the highlight is drawn out to the edge of the viewport. That
         // edge is the *trailing* one: the right in an LTR paragraph, the
         // left in an RTL one, where the text continues off to the left.
-        if end > line_abs_end && viewport_width > 0.0 {
+        if end > block_start + line.caret_end() && viewport_width > 0.0 {
             // An empty line — a blank paragraph between two prose
             // paragraphs — contributes no spans at all, so the folds
             // below would start from ±infinity and produce a rect of

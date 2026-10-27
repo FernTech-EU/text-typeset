@@ -277,7 +277,7 @@ fn hit_test_block(
             && block
                 .lines
                 .get(line_idx - 1)
-                .is_some_and(|prev| prev.char_range.end == offset_in_block)
+                .is_some_and(|prev| prev.caret_end() == offset_in_block)
         {
             CursorAffinity::Upstream
         } else {
@@ -311,7 +311,7 @@ fn hit_test_block(
         && block
             .lines
             .get(line_idx - 1)
-            .is_some_and(|prev| prev.char_range.end == offset_in_block)
+            .is_some_and(|prev| prev.caret_end() == offset_in_block)
     {
         CursorAffinity::Upstream
     } else {
@@ -636,7 +636,8 @@ fn caret_rect_in_frame(
 /// Returns None if the position is not within this block.
 ///
 /// Affinity selection: at a soft-wrap boundary the position equals
-/// both line K's `char_range.end` and line K+1's `char_range.start`.
+/// both line K's `char_range.end` and line K+1's `char_range.start`. (A
+/// hard break is not one: the offset after it is line K+1's alone.)
 /// The default Downstream picks line K (the earlier match — current
 /// pre-affinity behavior). Upstream picks line K+1 (the later match).
 /// At every non-boundary position there is only one matching line and
@@ -660,12 +661,11 @@ fn caret_rect_in_block(
     // Find every line whose char_range contains offset_in_block. At a
     // wrap boundary two consecutive lines match; pick the LAST when
     // affinity is Upstream, the FIRST otherwise.
+    // After a hard break only the next line matches (see
+    // `LayoutLine::caret_end`).
     let mut matched: Option<&LayoutLine> = None;
     for line in &block.lines {
-        if offset_in_block < line.char_range.start {
-            continue;
-        }
-        if offset_in_block > line.char_range.end {
+        if !line.holds_caret_at(offset_in_block) {
             continue;
         }
         match affinity {
@@ -860,5 +860,8 @@ fn find_position_in_line(line: &LayoutLine, local_x: f32) -> (usize, HitRegion, 
             .unwrap_or(line.char_range.end);
         return (offset, HitRegion::PastLineEnd, None);
     }
-    (line.char_range.end, HitRegion::PastLineEnd, None)
+    // Before a hard break the line ends with, which the caret never sits
+    // after on this line: a click past the end of a line of verse puts the
+    // caret at the end of that line, not at the start of the next.
+    (line.caret_end(), HitRegion::PastLineEnd, None)
 }

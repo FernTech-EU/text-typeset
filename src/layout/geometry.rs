@@ -185,15 +185,18 @@ pub(crate) fn raw_segments(line: &LayoutLine) -> Vec<RawSegment> {
 }
 
 /// How a line ends, read from the source text rather than from the
-/// glyphs — a hard break may or may not have produced a glyph.
-fn line_end(text: &str, table: &[usize], char_end: usize, total_chars: usize) -> LineEnd {
-    let byte_end = byte_at(table, char_end);
-    let upto = &text[..byte_end];
-    if upto.ends_with("\r\n") {
-        LineEnd::HardBreak { chars: 2, bytes: 2 }
-    } else if upto.ends_with('\n') {
-        LineEnd::HardBreak { chars: 1, bytes: 1 }
-    } else if char_end >= total_chars {
+/// glyphs — a hard break may or may not have produced a glyph. An empty line
+/// holds no break of its own, even when the one before it ended in one.
+fn line_end(
+    text: &str,
+    table: &[usize],
+    chars: std::ops::Range<usize>,
+    total_chars: usize,
+) -> LineEnd {
+    let upto = &text[byte_at(table, chars.start)..byte_at(table, chars.end)];
+    if let Some(end) = LineEnd::hard_break_ending(upto) {
+        end
+    } else if chars.end >= total_chars {
         LineEnd::EndOfText
     } else {
         LineEnd::SoftWrap
@@ -241,7 +244,7 @@ pub(crate) fn line_geometry(
     LineGeometry {
         index,
         byte_range: byte_at(table, char_range.start)..byte_at(table, char_range.end),
-        end: line_end(text, table, char_range.end, total_chars),
+        end: line_end(text, table, char_range.clone(), total_chars),
         char_range,
         rect: [x, y_top, width, line_height],
         baseline: y_top + line.ascent,
@@ -346,6 +349,7 @@ pub(crate) fn single_line_geometry(
         width,
         char_range: 0..covered,
         empty_caret_x: 0.0,
+        hard_break_chars: 0,
     };
 
     let mut geometry = line_geometry(&line, 0, 0.0, text, &table, total_chars);
@@ -353,7 +357,7 @@ pub(crate) fn single_line_geometry(
     // drawn — the caller anchors the undrawn tail at the ellipsis.
     geometry.char_range = 0..total_chars;
     geometry.byte_range = 0..text.len();
-    geometry.end = line_end(text, &table, total_chars, total_chars);
+    geometry.end = line_end(text, &table, 0..total_chars, total_chars);
     geometry.truncation = truncation;
     if geometry.segments.is_empty() {
         geometry.rect = [0.0, 0.0, width, line_height];

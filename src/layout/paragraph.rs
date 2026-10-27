@@ -56,10 +56,10 @@ fn is_mandatory_break_at(text: &str, byte_offset: usize) -> bool {
         return false;
     }
     let preceding = &text[..byte_offset];
-    matches!(
-        preceding.chars().next_back(),
-        Some('\n' | '\r' | '\u{0085}' | '\u{000B}' | '\u{000C}' | '\u{2028}' | '\u{2029}')
-    )
+    preceding
+        .chars()
+        .next_back()
+        .is_some_and(crate::types::is_hard_break)
 }
 
 /// Enumerate UAX #14 break opportunities in `text` and classify each
@@ -348,6 +348,8 @@ pub fn break_into_lines(
 
     // Greedy line wrapping
     let mut lines = Vec::new();
+    // Whether each line ends at a hard break, which justification leaves alone.
+    let mut hard_ends: Vec<bool> = Vec::new();
     let mut line_start_glyph = 0usize;
     let mut line_width = 0.0f32;
     // Last break opportunity within the current line: (glyph index, whether
@@ -396,6 +398,7 @@ pub fn break_into_lines(
                 append_hyphen(&mut line, &h.glyph);
             }
             lines.push(line);
+            hard_ends.push(is_mandatory);
 
             line_start_glyph = break_at;
             // Subsequent lines use full available width
@@ -439,6 +442,26 @@ pub fn break_into_lines(
             text,
         );
         lines.push(line);
+        hard_ends.push(false);
+    }
+
+    // A hard break at the very end starts a line of its own, empty, where the
+    // caret goes after Shift+Enter at the end of a paragraph: without it the
+    // caret stayed at the end of the line it had just left, and the paragraph
+    // a line short.
+    if text
+        .chars()
+        .next_back()
+        .is_some_and(crate::types::is_hard_break)
+    {
+        let end = byte_offset_to_char_offset(text, text.len());
+        let base = match run_order {
+            RunOrder::Logical(base) => base,
+            RunOrder::AlreadyVisual => TextDirection::LeftToRight,
+        };
+        let caret_x = empty_line_caret_x(alignment, base, 0.0, available_width);
+        lines.push(make_empty_line(metrics, end..end, caret_x));
+        hard_ends.push(false);
     }
 
     // Put each line's runs into visual order before anything reads their
@@ -506,8 +529,10 @@ pub fn break_into_lines(
                 }
             }
             Alignment::Justify => {
-                // Don't justify the last line
-                if i < last_idx && line.width > 0.0 {
+                // Don't justify the last line, nor one a hard break ends: a
+                // line of verse or of a letter set apart by Shift+Enter keeps
+                // its words where they are, as a browser and Typst set it.
+                if i < last_idx && !hard_ends[i] && line.width > 0.0 {
                     justify_line(line, line_avail, text);
                 }
             }
@@ -708,6 +733,13 @@ fn build_line(
     };
     let char_start = byte_offset_to_char_offset(text, byte_start);
     let char_end = byte_offset_to_char_offset(text, byte_end);
+    let hard_break_chars = match text
+        .get(byte_start..byte_end)
+        .and_then(crate::types::LineEnd::hard_break_ending)
+    {
+        Some(crate::types::LineEnd::HardBreak { chars, .. }) => chars as usize,
+        _ => 0,
+    };
 
     // Expand line height for inline images taller than the font ascent
     let mut ascent = metrics.ascent;
@@ -731,6 +763,7 @@ fn build_line(
         // positions from its runs, but if every run came out glyph-less
         // the caret still has the line's start to sit at.
         empty_caret_x: indent,
+        hard_break_chars,
     }
 }
 
@@ -795,6 +828,7 @@ fn make_empty_line(
         char_range,
         line_height: metrics.ascent + metrics.descent + metrics.leading,
         empty_caret_x,
+        hard_break_chars: 0,
     }
 }
 

@@ -570,6 +570,16 @@ impl Typesetter {
         self.flow.caret_rect(position, affinity)
     }
 
+    /// The start and end of the visual line holding `position`: where Home
+    /// and End go.
+    pub fn visual_line_range_at(
+        &self,
+        position: usize,
+        affinity: text_typeset::CursorAffinity,
+    ) -> Option<(usize, usize)> {
+        self.flow.visual_line_range_at(position, affinity)
+    }
+
     // ── Cursor & colors ──
     pub fn set_cursor(&mut self, cursor: &CursorDisplay) {
         self.flow.set_cursor(cursor);

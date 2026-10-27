@@ -1861,13 +1861,8 @@ impl DocumentFlow {
 
         let geometry = if want_geometry {
             let total_chars = rendered.chars().count();
-            let end = if rendered.ends_with("\r\n") {
-                crate::types::LineEnd::HardBreak { chars: 2, bytes: 2 }
-            } else if rendered.ends_with('\n') {
-                crate::types::LineEnd::HardBreak { chars: 1, bytes: 1 }
-            } else {
-                crate::types::LineEnd::EndOfText
-            };
+            let end = crate::types::LineEnd::hard_break_ending(&rendered)
+                .unwrap_or(crate::types::LineEnd::EndOfText);
             LayoutGeometry {
                 lines: vec![crate::types::LineGeometry {
                     index: 0,
@@ -2438,7 +2433,7 @@ impl DocumentFlow {
         let offset = position.saturating_sub(block.position);
 
         for line in &block.lines {
-            if offset < line.char_range.start || offset > line.char_range.end {
+            if !line.holds_caret_at(offset) {
                 continue;
             }
             // Compare against each run's own cluster span rather than
@@ -2499,10 +2494,7 @@ impl DocumentFlow {
         let block = self.block_containing(position)?;
         let offset = position.saturating_sub(block.position);
 
-        let mut candidates = block
-            .lines
-            .iter()
-            .filter(|l| offset >= l.char_range.start && offset <= l.char_range.end);
+        let mut candidates = block.lines.iter().filter(|l| l.holds_caret_at(offset));
         let first = candidates.next()?;
 
         // Two lines can claim a boundary offset. Per `CursorAffinity`:
@@ -2514,9 +2506,11 @@ impl DocumentFlow {
             None => first,
         };
 
+        // End stops before the hard break a line ends with: after it is the
+        // next line.
         Some((
             block.position + line.char_range.start,
-            block.position + line.char_range.end,
+            block.position + line.caret_end(),
         ))
     }
 
@@ -2608,7 +2602,7 @@ impl DocumentFlow {
         block
             .lines
             .iter()
-            .filter(|l| offset >= l.char_range.start && offset <= l.char_range.end)
+            .filter(|l| l.holds_caret_at(offset))
             .any(|l| l.is_direction_boundary(offset))
     }
 

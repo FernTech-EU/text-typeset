@@ -217,11 +217,12 @@ pub struct HitTestResult {
     pub position: usize,
     /// Which side of a soft-wrap boundary the click landed on. When
     /// the matched line's Y range contained the click and `position`
-    /// equals that line's `char_range.start` AND a preceding line in
-    /// the same block ends at the same position, the click is on the
+    /// equals that line's `char_range.start` AND the preceding line in
+    /// the same block wraps at the same position, the click is on the
     /// upstream side of the boundary → `Upstream`. Otherwise
-    /// `Downstream`. At non-wrap positions the value is `Downstream`
-    /// (default) and does not affect anything.
+    /// `Downstream`. At non-wrap positions, the start of a line after a
+    /// hard break included, the value is `Downstream` (default) and does
+    /// not affect anything.
     pub affinity: CursorAffinity,
     /// Which block (paragraph) was hit, identified by stable block ID.
     pub block_id: usize,
@@ -596,15 +597,48 @@ pub enum LineEnd {
     /// The line was broken to fit the wrap width. Nothing in the source
     /// separates it from the next line.
     SoftWrap,
-    /// The line ends with an explicit break in the source.
+    /// The line ends with an explicit break in the source: a `\n`, a `\r\n`,
+    /// or any other hard line break of UAX #14 (a carriage return, next
+    /// line, vertical tab, form feed, paragraph separator, or the line
+    /// separator U+2028 a word processor inserts for Shift+Enter).
     ///
-    /// `chars` is how many source *characters* the break occupies (1 for
-    /// `\n`, 2 for `\r\n`); `bytes` is how many source *bytes* it occupies
-    /// (likewise 1 and 2). AccessKit counts a `\r\n` as a single character
-    /// whose `character_lengths` entry is 2 — that is `bytes`.
+    /// `chars` is how many source *characters* the break occupies (1, or 2
+    /// for `\r\n`); `bytes` is how many source *bytes* it occupies (1 for
+    /// `\n`, 2 for `\r\n`, 3 for U+2028). AccessKit counts a `\r\n` as a
+    /// single character whose `character_lengths` entry is 2 — that is
+    /// `bytes`.
     HardBreak { chars: u8, bytes: u8 },
     /// The line ends because the source does.
     EndOfText,
+}
+
+impl LineEnd {
+    /// The explicit break `text` ends with, if it ends with one.
+    pub(crate) fn hard_break_ending(text: &str) -> Option<Self> {
+        if text.ends_with("\r\n") {
+            return Some(LineEnd::HardBreak { chars: 2, bytes: 2 });
+        }
+        let last = text.chars().next_back()?;
+        is_hard_break(last).then(|| LineEnd::HardBreak {
+            chars: 1,
+            bytes: last.len_utf8() as u8,
+        })
+    }
+}
+
+/// Whether `c` is a hard line break, after which a line always ends (UAX #14
+/// classes BK, CR, LF and NL): line feed, carriage return, next line,
+/// vertical tab, form feed, line separator (U+2028) and paragraph separator
+/// (U+2029).
+///
+/// It is laid out as nothing: no glyph and no advance. A font that draws one
+/// (some draw U+2028 as a box) would otherwise put it at the end of the line,
+/// and its advance would push a right-aligned or centred line off its place.
+pub(crate) fn is_hard_break(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | '\r' | '\u{0085}' | '\u{000B}' | '\u{000C}' | '\u{2028}' | '\u{2029}'
+    )
 }
 
 /// Where a line's trailing ellipsis was drawn, for a line the layout

@@ -65,9 +65,37 @@ pub struct LayoutLine {
     /// caret stops; `build_line` records the line's start x for the
     /// degenerate run-without-glyphs case.
     pub empty_caret_x: f32,
+    /// How many characters at the end of `char_range` are the hard line
+    /// break the line ends with: 0 when it wraps or ends the text, 1 for a
+    /// `\n` or a line separator (U+2028, Shift+Enter in a word processor),
+    /// 2 for `\r\n`.
+    ///
+    /// The caret never sits after them on this line (see
+    /// [`caret_end`](Self::caret_end)).
+    pub hard_break_chars: usize,
 }
 
 impl LayoutLine {
+    /// The last offset the caret takes on this line: the end of its text,
+    /// before the hard break it ends with.
+    ///
+    /// At a soft wrap the offset where one line ends and the next starts
+    /// belongs to both, and affinity picks one. After a hard break it is the
+    /// next line's start and nothing else: drawn at the end of this line, a
+    /// caret there typed onto the next one, and End put it after the break.
+    pub fn caret_end(&self) -> usize {
+        self.char_range.end
+            - self
+                .hard_break_chars
+                .min(self.char_range.end - self.char_range.start)
+    }
+
+    /// Whether the caret at `offset` (in the block's text) can sit on this
+    /// line: from its start to its [`caret_end`](Self::caret_end).
+    pub(crate) fn holds_caret_at(&self, offset: usize) -> bool {
+        offset >= self.char_range.start && offset <= self.caret_end()
+    }
+
     /// End (exclusive) of the cluster starting at char offset `cluster`:
     /// the smallest distinct glyph cluster in the line strictly greater
     /// than `cluster`, or the line's `char_range.end` if none is larger.

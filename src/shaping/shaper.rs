@@ -79,13 +79,46 @@ pub fn shape_text_with_fallback(
     features: &[Feature],
 ) -> Option<ShapedRun> {
     let mut run = shape_text_directed(registry, resolved, text, text_offset, direction, features)?;
+    let breaks = blank_hard_breaks(text, &mut run);
 
-    // Check for .notdef glyphs and attempt fallback
-    if run.glyphs.iter().any(|g| g.glyph_id == 0) && !text.is_empty() {
+    // Check for .notdef glyphs and attempt fallback. A hard break is glyph 0
+    // on purpose: no font is looked for to draw it.
+    if run.glyphs.iter().filter(|g| g.glyph_id == 0).count() > breaks && !text.is_empty() {
         apply_glyph_fallback(registry, resolved, text, text_offset, features, &mut run);
+        // A break beside a character the primary font lacks is re-shaped with
+        // it, in a font that may well draw it.
+        blank_hard_breaks(text, &mut run);
     }
 
     Some(run)
+}
+
+/// Lay out every hard line break in `run` as nothing: glyph 0, which is never
+/// drawn, with no advance and no offset (see [`crate::types::is_hard_break`]).
+/// Returns how many there are.
+///
+/// A font draws a line separator as it likes (a box, a pilcrow) or not at all,
+/// and gives it whatever advance it likes, which pushed a right-aligned or
+/// centred line off its place by that much.
+fn blank_hard_breaks(text: &str, run: &mut ShapedRun) -> usize {
+    let mut count = 0;
+    for glyph in &mut run.glyphs {
+        let is_break = text
+            .get(glyph.cluster as usize..)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(crate::types::is_hard_break);
+        if is_break {
+            glyph.glyph_id = 0;
+            glyph.x_advance = 0.0;
+            glyph.x_offset = 0.0;
+            glyph.y_offset = 0.0;
+            count += 1;
+        }
+    }
+    if count > 0 {
+        run.advance_width = run.glyphs.iter().map(|g| g.x_advance).sum();
+    }
+    count
 }
 
 /// Re-shape .notdef glyphs using fallback fonts.
