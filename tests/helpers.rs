@@ -666,6 +666,7 @@ pub fn make_block_at(id: usize, position: usize, text: &str) -> BlockLayoutParam
             font_bold: None,
             font_italic: None,
             font_point_size: None,
+            size_scale: 1.0,
             underline_style: UnderlineStyle::None,
             overline: false,
             strikeout: false,

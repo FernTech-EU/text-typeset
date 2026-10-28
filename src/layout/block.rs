@@ -112,6 +112,14 @@ pub struct FragmentParams {
     pub font_bold: Option<bool>,
     pub font_italic: Option<bool>,
     pub font_point_size: Option<u32>,
+    /// Multiplies the fragment's size: `font_point_size` when it is set, the
+    /// default size the host gave [`set_default_font`] (the body size) when it
+    /// is not. The product is cut to whole pixels. `1.0` for body text; the
+    /// bridge gives a heading its level's ratio (2.0 for a level 1 heading),
+    /// so headings keep their proportion to whatever body size the host sets.
+    ///
+    /// [`set_default_font`]: crate::TextFontService::set_default_font
+    pub size_scale: f32,
     pub underline_style: crate::types::UnderlineStyle,
     pub overline: bool,
     pub strikeout: bool,
@@ -268,13 +276,24 @@ pub fn layout_block(
             continue;
         }
 
+        // A heading's size is a ratio of the body size: the run's own size
+        // when it has one, the default size otherwise.
+        let point_size = if frag.size_scale != 1.0 {
+            let base = frag
+                .font_point_size
+                .map(|s| s as f32)
+                .unwrap_or(registry.default_size_px());
+            Some((base * frag.size_scale) as u32)
+        } else {
+            frag.font_point_size
+        };
         // Scale font size for superscript/subscript
         let font_point_size = match frag.vertical_alignment {
             crate::types::VerticalAlignment::SuperScript
-            | crate::types::VerticalAlignment::SubScript => frag
-                .font_point_size
-                .map(|s| ((s as f32 * 0.65) as u32).max(1)),
-            crate::types::VerticalAlignment::Normal => frag.font_point_size,
+            | crate::types::VerticalAlignment::SubScript => {
+                point_size.map(|s| ((s as f32 * 0.65) as u32).max(1))
+            }
+            crate::types::VerticalAlignment::Normal => point_size,
         };
 
         let resolved = resolve_font(

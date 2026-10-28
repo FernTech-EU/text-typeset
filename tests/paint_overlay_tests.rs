@@ -336,6 +336,7 @@ fn bold_then_regular(text_a: &str, text_b: &str) -> text_typeset::layout::block:
         font_bold: bold,
         font_italic: None,
         font_point_size: None,
+        size_scale: 1.0,
         underline_style: UnderlineStyle::None,
         overline: false,
         strikeout: false,

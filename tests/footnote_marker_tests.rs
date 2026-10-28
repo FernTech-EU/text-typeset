@@ -41,6 +41,7 @@ fn block_with_marker(id: usize, marker: Option<&str>) -> BlockLayoutParams {
         font_bold: None,
         font_italic: None,
         font_point_size: None,
+        size_scale: 1.0,
         underline_style: UnderlineStyle::None,
         overline: false,
         strikeout: false,

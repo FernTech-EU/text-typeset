@@ -153,6 +153,8 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
         .map(convert_alignment)
         .unwrap_or_default();
 
+    // A heading's size as a ratio of the body size (the host's default font
+    // size, or the run's own size when it sets one), applied at layout.
     let heading_scale = match block.block_format.heading_level {
         Some(1) => 2.0,
         Some(2) => 1.5,
@@ -362,12 +364,9 @@ fn convert_fragment(
                 font_weight: format.font_weight,
                 font_bold: format.font_bold,
                 font_italic: format.font_italic,
-                font_point_size: if heading_scale != 1.0 {
-                    // Apply heading scale; use 16 as default if no explicit size
-                    Some((format.font_point_size.unwrap_or(16) as f32 * heading_scale) as u32)
-                } else {
-                    format.font_point_size
-                },
+                font_point_size: format.font_point_size,
+                // Applied at layout, to the run's size or the body size.
+                size_scale: heading_scale,
                 underline_style: convert_underline_style(format),
                 overline: format.font_overline.unwrap_or(false),
                 strikeout: format.font_strikeout.unwrap_or(false),
@@ -400,6 +399,7 @@ fn convert_fragment(
             font_bold: format.font_bold,
             font_italic: format.font_italic,
             font_point_size: format.font_point_size,
+            size_scale: 1.0,
             underline_style: convert_underline_style(format),
             overline: format.font_overline.unwrap_or(false),
             strikeout: format.font_strikeout.unwrap_or(false),
@@ -434,6 +434,7 @@ fn convert_fragment(
             font_bold: None,
             font_italic: None,
             font_point_size: None,
+            size_scale: 1.0,
             underline_style: crate::types::UnderlineStyle::None,
             overline: false,
             strikeout: false,

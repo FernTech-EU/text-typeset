@@ -672,6 +672,7 @@ fn hit_test_link_region_detected() {
             font_bold: None,
             font_italic: None,
             font_point_size: None,
+            size_scale: 1.0,
             underline_style: UnderlineStyle::Single,
             overline: false,
             strikeout: false,
