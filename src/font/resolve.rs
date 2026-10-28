@@ -1,3 +1,4 @@
+use crate::font::color::{GlyphPaint, glyph_paint};
 use crate::font::registry::FontRegistry;
 use crate::types::FontFaceId;
 
@@ -140,23 +141,186 @@ pub fn find_fallback_font(
     ch: char,
     exclude: FontFaceId,
 ) -> Option<FontFaceId> {
-    let covers = |entry: &crate::font::registry::FontEntry| {
-        swash::FontRef::from_index(entry.bytes(), entry.face_index as usize)
-            .is_some_and(|font_ref| font_ref.charmap().map(ch) != 0)
+    let weight = registry
+        .get(exclude)
+        .and_then(|entry| registry.fontdb_weight(entry.fontdb_id))
+        .unwrap_or(400);
+    let style = FaceStyle::of_face(registry, exclude, weight);
+    find_fallback_face(registry, ch, Presentation::Text, style, &[exclude]).map(|(face, _)| face)
+}
+
+/// The weight, style and width a fallback face should match: those of the
+/// text it stands in for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct FaceStyle {
+    pub(crate) weight: u16,
+    pub(crate) style: fontdb::Style,
+    pub(crate) stretch: fontdb::Stretch,
+}
+
+impl FaceStyle {
+    /// The requested `weight`, with the style and width of `face_id`, the
+    /// face the text was resolved to. The weight comes from the request,
+    /// not the face: a variable face resolves every weight to one face.
+    pub(crate) fn of_face(registry: &FontRegistry, face_id: FontFaceId, weight: u16) -> Self {
+        let (style, stretch) = registry
+            .face_style(face_id)
+            .unwrap_or((fontdb::Style::Normal, fontdb::Stretch::Normal));
+        Self {
+            weight,
+            style,
+            stretch,
+        }
+    }
+}
+
+/// How a character is to be drawn, which decides the face fallback prefers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Presentation {
+    /// As text: a face that draws it plain first, then one that draws it in
+    /// colour. A symbol with no emoji presentation of its own (U+2764 with no
+    /// U+FE0F after it) stays a text symbol when a text face has it.
+    Text,
+    /// As an emoji: a face that draws it in colour first (see
+    /// [`crate::shaping::emoji`]), then one that draws it plain.
+    Emoji,
+}
+
+impl Presentation {
+    /// 0 for the glyph this presentation wants, 1 for the one it makes do
+    /// with.
+    fn rank(self, paint: GlyphPaint) -> u8 {
+        match (self, paint) {
+            (Presentation::Text, GlyphPaint::Plain) | (Presentation::Emoji, GlyphPaint::Color) => 0,
+            (Presentation::Text, GlyphPaint::Color) | (Presentation::Emoji, GlyphPaint::Plain) => 1,
+        }
+    }
+}
+
+/// Find a face other than those in `exclude` that has a glyph for `ch`,
+/// and say how that glyph is drawn.
+///
+/// Faces are visited explicitly-registered first, then system faces, and for
+/// [`Presentation::Emoji`] the faces whose family name says "emoji" before
+/// both: every colour emoji font in use (Apple Color Emoji, Segoe UI Emoji,
+/// Noto Color Emoji, Twemoji) says so in its name, and asking the metadata
+/// first finds it without opening, one by one, the system faces that sit
+/// before it and happen to have a monochrome glyph.
+///
+/// The first face whose glyph is drawn as the presentation wants (see
+/// [`Presentation`]) is taken. Failing that, the first face that draws the
+/// glyph some other way, so that the system faces need not all be opened,
+/// which loads every one of them, to find that none draws it as wanted.
+///
+/// The face taken is then swapped for the face of its family that matches
+/// `style` (see [`FontRegistry::family_face_matching`]), when that face has
+/// the glyph too and draws it as well: the first face found is whichever
+/// file the system lists first, Bold as readily as Regular.
+pub(crate) fn find_fallback_face(
+    registry: &FontRegistry,
+    ch: char,
+    presentation: Presentation,
+    style: FaceStyle,
+    exclude: &[FontFaceId],
+) -> Option<(FontFaceId, GlyphPaint)> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Pass {
+        EmojiNamed,
+        Explicit,
+        System,
+    }
+    let passes: &[Pass] = match presentation {
+        Presentation::Text => &[Pass::Explicit, Pass::System],
+        Presentation::Emoji => &[Pass::EmojiNamed, Pass::Explicit, Pass::System],
     };
 
-    // Pass 1: explicitly-registered faces. Pass 2: system faces.
-    for system_pass in [false, true] {
+    let glyph_paint_of = |face_id: FontFaceId| {
+        let entry = registry.get(face_id)?;
+        let glyph = swash::FontRef::from_index(entry.bytes(), entry.face_index as usize)?
+            .charmap()
+            .map(ch);
+        (glyph != 0).then(|| glyph_paint(entry, glyph))
+    };
+    let matching = |(face_id, paint): (FontFaceId, GlyphPaint)| {
+        registry
+            .family_face_matching(face_id, style.weight, style.style, style.stretch)
+            .filter(|&better| better != face_id && !exclude.contains(&better))
+            .and_then(|better| {
+                let better_paint = glyph_paint_of(better)?;
+                (presentation.rank(better_paint) <= presentation.rank(paint))
+                    .then_some((better, better_paint))
+            })
+            .unwrap_or((face_id, paint))
+    };
+
+    // The first face seen that draws the glyph, but not as wanted.
+    let mut second: Option<(FontFaceId, GlyphPaint)> = None;
+    for &pass in passes {
         for (face_id, entry) in registry.all_entries() {
-            if face_id == exclude || entry.is_system != system_pass {
+            if exclude.contains(&face_id) {
                 continue;
             }
-            if covers(entry) {
-                return Some(face_id);
+            let visits = match pass {
+                Pass::EmojiNamed => registry.is_emoji_family(face_id),
+                Pass::Explicit => !entry.is_system,
+                Pass::System => entry.is_system,
+            };
+            if !visits {
+                continue;
+            }
+            let Some(glyph) = swash::FontRef::from_index(entry.bytes(), entry.face_index as usize)
+                .map(|font_ref| font_ref.charmap().map(ch))
+                .filter(|&glyph| glyph != 0)
+            else {
+                continue;
+            };
+            let paint = glyph_paint(entry, glyph);
+            match presentation.rank(paint) {
+                0 => return Some(matching((face_id, paint))),
+                1 if pass == Pass::System => {
+                    return Some(matching(second.unwrap_or((face_id, paint))));
+                }
+                _ => {
+                    second.get_or_insert((face_id, paint));
+                }
             }
         }
     }
-    None
+    second.map(matching)
+}
+
+/// Whether `face_id` has a glyph for every character of `text` that needs
+/// one: whitespace, controls and default-ignorable characters (variation
+/// selectors, zero-width joiners) are skipped.
+pub(crate) fn face_covers(registry: &FontRegistry, face_id: FontFaceId, text: &str) -> bool {
+    let Some(entry) = registry.get(face_id) else {
+        return false;
+    };
+    let Some(font_ref) = swash::FontRef::from_index(entry.bytes(), entry.face_index as usize)
+    else {
+        return false;
+    };
+    let charmap = font_ref.charmap();
+    text.chars()
+        .filter(|&c| !c.is_whitespace() && !c.is_control() && !is_default_ignorable(c))
+        .all(|c| charmap.map(c) != 0)
+}
+
+/// The default-ignorable characters a font need not map: they shape to
+/// nothing whether it does or not.
+fn is_default_ignorable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{E0000}'..='\u{E0FFF}'
+    )
 }
 
 /// Convert TextFormat weight fields to a u16 weight value for fontdb.

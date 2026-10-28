@@ -1,3 +1,4 @@
+pub(crate) mod color;
 pub mod registry;
 pub mod resolve;
 pub mod writing_system;

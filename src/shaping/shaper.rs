@@ -1,8 +1,13 @@
 use harfrust::{Buffer, Direction, Feature, ShapeOptions, ShaperFont, Tag};
 
+use crate::font::color::{GlyphPaint, glyph_paint};
 use crate::font::registry::FontRegistry;
-use crate::font::resolve::ResolvedFont;
+use crate::font::resolve::{
+    FaceStyle, Presentation, ResolvedFont, face_covers, find_fallback_face,
+};
+use crate::shaping::emoji;
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
+use crate::types::FontFaceId;
 use crate::types::FontFeature;
 
 /// Convert public [`FontFeature`] toggles into harfrust [`Feature`]s,
@@ -79,12 +84,31 @@ pub fn shape_text_with_fallback(
     features: &[Feature],
 ) -> Option<ShapedRun> {
     let mut run = shape_text_directed(registry, resolved, text, text_offset, direction, features)?;
-    let breaks = blank_hard_breaks(text, &mut run);
+    blank_hard_breaks(text, &mut run);
 
-    // Check for .notdef glyphs and attempt fallback. A hard break is glyph 0
-    // on purpose: no font is looked for to draw it.
-    if run.glyphs.iter().filter(|g| g.glyph_id == 0).count() > breaks && !text.is_empty() {
-        apply_glyph_fallback(registry, resolved, text, text_offset, features, &mut run);
+    // Look for another face for every glyph the primary font lacks (a hard
+    // break is glyph 0 on purpose and needs none) and every emoji it does not
+    // draw in colour.
+    let may_need = run.glyphs.iter().any(|g| g.glyph_id == 0) || emoji::may_contain_emoji(text);
+    let needs = if may_need {
+        fallback_needs(registry, text, &run)
+    } else {
+        Vec::new()
+    };
+    if needs.iter().any(|n| n.needed) {
+        let style = FaceStyle::of_face(registry, resolved.font_face_id, resolved.weight);
+        apply_glyph_fallback(
+            registry,
+            resolved,
+            style,
+            text,
+            text_offset,
+            features,
+            &mut run,
+            &needs,
+            &[resolved.font_face_id],
+            0,
+        );
         // A break beside a character the primary font lacks is re-shaped with
         // it, in a font that may well draw it.
         blank_hard_breaks(text, &mut run);
@@ -125,58 +149,151 @@ fn blank_hard_breaks(text: &str, run: &mut ShapedRun) -> usize {
     count
 }
 
-/// Re-shape .notdef glyphs using fallback fonts.
+/// How deep fallback goes: the part of a span its fallback face does not
+/// draw is handed to another face, and what that one cannot draw to another,
+/// each time with every face tried so far left out. A span of one script
+/// takes one face and a mixed one (Han then Hangul, say) a second; the cap
+/// only bounds a pathological font set.
+const MAX_FALLBACK_DEPTH: usize = 6;
+
+/// What fallback makes of one glyph of a shaped run.
+#[derive(Debug, Clone, Copy)]
+struct FallbackNeed {
+    /// Whether another face is looked for.
+    needed: bool,
+    /// Whether the glyph has no glyph at all (`.notdef`), as against one that
+    /// is drawn but not as it should be (an emoji drawn in monochrome).
+    missing: bool,
+    /// Whether the glyph's cluster asks for emoji presentation.
+    emoji: bool,
+}
+
+/// Decide, glyph by glyph, which glyphs of `run` (shaped from `text`) want
+/// another face: those with no glyph, and those of an emoji cluster drawn
+/// in anything but colour. A hard break needs none.
+fn fallback_needs(registry: &FontRegistry, text: &str, run: &ShapedRun) -> Vec<FallbackNeed> {
+    let emoji = emoji_clusters(text, &run.glyphs);
+    run.glyphs
+        .iter()
+        .zip(emoji)
+        .map(|(glyph, emoji)| {
+            if is_hard_break_glyph(text, glyph) {
+                return FallbackNeed {
+                    needed: false,
+                    missing: false,
+                    emoji,
+                };
+            }
+            let missing = glyph.glyph_id == 0;
+            let not_in_color = emoji
+                && !missing
+                && registry
+                    .get(glyph.font_face_id)
+                    .is_some_and(|entry| glyph_paint(entry, glyph.glyph_id) != GlyphPaint::Color);
+            FallbackNeed {
+                needed: missing || not_in_color,
+                missing,
+                emoji,
+            }
+        })
+        .collect()
+}
+
+/// For each glyph of `glyphs` (shaped from `text`), whether its cluster asks
+/// for emoji presentation (see [`crate::shaping::emoji`]).
+fn emoji_clusters(text: &str, glyphs: &[ShapedGlyph]) -> Vec<bool> {
+    if !emoji::may_contain_emoji(text) {
+        return vec![false; glyphs.len()];
+    }
+    // A cluster runs from its own start to the next start in the text, which
+    // works for an RTL run too, whose glyphs carry descending clusters.
+    let mut starts: Vec<usize> = glyphs.iter().map(|g| g.cluster as usize).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    glyphs
+        .iter()
+        .map(|g| {
+            let start = g.cluster as usize;
+            let end = match starts.binary_search(&start) {
+                Ok(i) => starts.get(i + 1).copied().unwrap_or(text.len()),
+                Err(_) => text.len(),
+            };
+            text.get(start..end).is_some_and(emoji::cluster_wants_emoji)
+        })
+        .collect()
+}
+
+/// Re-shape the glyphs of `run` that need another face in fallback fonts.
 ///
-/// Works on **spans** of consecutive .notdef glyphs, not on glyphs one at a
-/// time: each span is mapped back to the character range that produced it and
-/// that whole range is re-shaped in the fallback font, then spliced in.
+/// Works on **spans** of consecutive glyphs that need one, not on glyphs one
+/// at a time: each span is mapped back to the character range that produced
+/// it and that whole range is re-shaped in the fallback font, then spliced
+/// in.
 ///
 /// Shaping a span as a unit is what makes complex scripts survive fallback.
-/// Re-shaping character by character — which this used to do — cannot join
+/// Re-shaping character by character, which this used to do, cannot join
 /// Arabic, because a letter shaped alone has no neighbours and can only take
 /// its isolated form. It also kept only the *first* glyph of each result, so
 /// any letter whose isolated form is a base plus a mark lost the mark. An
 /// Arabic word set in a font without Arabic came out as disconnected,
 /// dotless stumps.
 ///
+/// A span is cut where emoji presentation starts or stops, so that an emoji
+/// after CJK text gets a face of its own rather than the CJK font's
+/// `.notdef`. The span is re-shaped in the face found for its first
+/// character, and whatever that face does not draw goes through the same
+/// steps again, with every face tried so far left out: before, a span was
+/// shaped in one face and what that face lacked stayed blank. When the face
+/// found for the first character a span's face lacks draws the whole span,
+/// the span is set in that face instead, so that a word is not split
+/// between two CJK fonts of different designs.
+///
+/// Every face is chosen to match `style`, the weight, style and width of the
+/// text (see [`find_fallback_face`]).
+///
 /// A span is re-shaped with the run's own direction rather than `Auto`, so
 /// the substituted glyphs come back in the same visual order as the ones
 /// around them.
+#[allow(clippy::too_many_arguments)]
 fn apply_glyph_fallback(
     registry: &FontRegistry,
     primary: &ResolvedFont,
+    style: FaceStyle,
     text: &str,
     text_offset: usize,
     features: &[Feature],
     run: &mut ShapedRun,
+    needs: &[FallbackNeed],
+    tried: &[FontFaceId],
+    depth: usize,
 ) {
-    use crate::font::resolve::find_fallback_font;
-
-    // Maximal spans of consecutive .notdef glyphs, as index ranges. A hard break
-    // is glyph 0 on purpose (see `blank_hard_breaks`) and ends a span: inside one it
-    // would choose the span's font, since a span is re-shaped in the font that draws
-    // its first character, and a character beside it would lose its own.
-    let missing = |glyph: &ShapedGlyph| glyph.glyph_id == 0 && !is_hard_break_glyph(text, glyph);
-    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+    // Maximal spans of consecutive glyphs that need a face, cut where emoji
+    // presentation changes. A hard break needs none and so ends a span:
+    // inside one it would choose the span's font, since a span is re-shaped
+    // in the font that draws its first character, and a character beside it
+    // would lose its own.
+    let mut spans: Vec<(std::ops::Range<usize>, bool)> = Vec::new();
     let mut i = 0;
-    while i < run.glyphs.len() {
-        if missing(&run.glyphs[i]) {
-            let start = i;
-            while i < run.glyphs.len() && missing(&run.glyphs[i]) {
-                i += 1;
-            }
-            spans.push(start..i);
-        } else {
+    while i < needs.len() {
+        if !needs[i].needed {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let emoji = needs[i].emoji;
+        while i < needs.len() && needs[i].needed && needs[i].emoji == emoji {
             i += 1;
         }
+        spans.push((start..i, emoji));
     }
     if spans.is_empty() {
         return;
     }
 
     // Splice from the back so earlier ranges stay valid as lengths change.
-    for span in spans.into_iter().rev() {
-        let Some((byte_start, byte_end)) = notdef_char_range(&run.glyphs, &span, text) else {
+    for (span, emoji) in spans.into_iter().rev() {
+        let any_missing = needs[span.clone()].iter().any(|n| n.missing);
+        let Some((byte_start, byte_end)) = span_char_range(&run.glyphs, &span, text) else {
             continue;
         };
         let Some(slice) = text.get(byte_start..byte_end) else {
@@ -186,45 +303,101 @@ fn apply_glyph_fallback(
             continue;
         };
 
-        let Some(fallback_id) = find_fallback_font(registry, first_char, primary.font_face_id)
+        // An emoji drawn in monochrome is left out with the faces tried
+        // already, so the search is for a face that draws it otherwise.
+        let mut excluded: Vec<FontFaceId> = tried.to_vec();
+        for glyph in &run.glyphs[span.clone()] {
+            if !excluded.contains(&glyph.font_face_id) {
+                excluded.push(glyph.font_face_id);
+            }
+        }
+        let presentation = if emoji {
+            Presentation::Emoji
+        } else {
+            Presentation::Text
+        };
+        let Some((mut fallback_id, paint)) =
+            find_fallback_face(registry, first_char, presentation, style, &excluded)
         else {
-            continue; // no fallback available — leave the span as .notdef
+            continue; // no fallback available: leave the span as it is
         };
-        let Some(fallback_entry) = registry.get(fallback_id) else {
-            continue;
-        };
-
-        let fallback_resolved = ResolvedFont {
-            font_face_id: fallback_id,
-            size_px: primary.size_px,
-            face_index: fallback_entry.face_index,
-            swash_cache_key: fallback_entry.swash_cache_key,
-            scale_factor: primary.scale_factor,
-            weight: primary.weight,
-        };
-
-        let Some(fallback_run) = shape_text_directed(
-            registry,
-            &fallback_resolved,
-            slice,
-            text_offset + byte_start,
-            run.direction,
-            features,
-        ) else {
-            continue;
-        };
-        if fallback_run.glyphs.is_empty() {
+        // An emoji already drawn, if in monochrome, is only worth replacing
+        // by one drawn in colour.
+        if emoji && !any_missing && paint != GlyphPaint::Color {
             continue;
         }
 
-        // Clusters come back local to `slice`; lift them into `text` space,
-        // which is what the rest of the pipeline expects of this run.
+        let reshape = |face: FontFaceId| -> Option<(ResolvedFont, ShapedRun)> {
+            let entry = registry.get(face)?;
+            let resolved = ResolvedFont {
+                font_face_id: face,
+                size_px: primary.size_px,
+                face_index: entry.face_index,
+                swash_cache_key: entry.swash_cache_key,
+                scale_factor: primary.scale_factor,
+                weight: primary.weight,
+            };
+            // Clusters come back local to `slice`.
+            let run = shape_text_directed(
+                registry,
+                &resolved,
+                slice,
+                text_offset + byte_start,
+                run.direction,
+                features,
+            )?;
+            (!run.glyphs.is_empty()).then_some((resolved, run))
+        };
+        let Some((mut fallback_resolved, mut fallback_run)) = reshape(fallback_id) else {
+            continue;
+        };
+        blank_hard_breaks(slice, &mut fallback_run);
+
+        excluded.push(fallback_id);
+        let mut still = fallback_needs(registry, slice, &fallback_run);
+        if !emoji
+            && let Some(lacking) = fallback_run
+                .glyphs
+                .iter()
+                .zip(&still)
+                .find(|(_, n)| n.missing)
+                .and_then(|(g, _)| slice.get(g.cluster as usize..)?.chars().next())
+            && let Some((whole_id, _)) =
+                find_fallback_face(registry, lacking, Presentation::Text, style, &excluded)
+            && face_covers(registry, whole_id, slice)
+            && let Some((resolved, mut whole_run)) = reshape(whole_id)
+        {
+            blank_hard_breaks(slice, &mut whole_run);
+            fallback_id = whole_id;
+            fallback_resolved = resolved;
+            fallback_run = whole_run;
+            excluded.push(fallback_id);
+            still = fallback_needs(registry, slice, &fallback_run);
+        }
+
+        if depth < MAX_FALLBACK_DEPTH && still.iter().any(|n| n.needed) {
+            apply_glyph_fallback(
+                registry,
+                &fallback_resolved,
+                style,
+                slice,
+                text_offset + byte_start,
+                features,
+                &mut fallback_run,
+                &still,
+                &excluded,
+                depth + 1,
+            );
+        }
+
+        // Lift the clusters from `slice` into `text` space, which is what the
+        // rest of the pipeline expects of this run. Each glyph keeps the face
+        // it was shaped in, which deeper fallback may have changed.
         let replacement: Vec<ShapedGlyph> = fallback_run
             .glyphs
             .into_iter()
             .map(|mut g| {
                 g.cluster += byte_start as u32;
-                g.font_face_id = fallback_id;
                 g
             })
             .collect();
@@ -235,16 +408,16 @@ fn apply_glyph_fallback(
     run.advance_width = run.glyphs.iter().map(|g| g.x_advance).sum();
 }
 
-/// The byte range of `text` that a span of consecutive .notdef glyphs covers.
+/// The byte range of `text` that a span of consecutive glyphs covers.
 ///
 /// Glyphs sit in visual order, so clusters ascend across an LTR run and
 /// descend across an RTL one. Taking the min and max over the span rather
 /// than its first and last glyph keeps this direction-agnostic.
 ///
 /// The span's end is the nearest cluster *after* it among the glyphs outside
-/// it — the start of whatever the primary font did manage to shape — or the
-/// end of the text when the span runs to the edge.
-fn notdef_char_range(
+/// it (the start of whatever follows it in the text), or the end of the text
+/// when the span runs to the edge.
+fn span_char_range(
     glyphs: &[ShapedGlyph],
     span: &std::ops::Range<usize>,
     text: &str,

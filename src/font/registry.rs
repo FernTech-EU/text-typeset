@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use fontdb::{Database, Family, Query, Source, Style, Weight};
+use fontdb::{Database, Family, Query, Source, Stretch, Style, Weight};
 
+use crate::font::color::ColorTables;
 use crate::font::writing_system_index::{
     FaceBytes, FaceRef, WritingSystemIndexBuilder, build_from_faces,
 };
@@ -65,6 +66,9 @@ pub struct FontEntry {
     /// [`shaping_font`](Self::shaping_font); `None` if the bytes hold no
     /// usable face. `OnceLock` keeps `FontEntry` `Sync`.
     shaping_font: OnceLock<Option<harfrust::Font>>,
+    /// The face's colour tables, read on first use by glyph fallback or the
+    /// rasterizer (see [`crate::font::color`]).
+    color_tables: OnceLock<ColorTables>,
 }
 
 impl FontEntry {
@@ -98,6 +102,12 @@ impl FontEntry {
         self.shaping_font
             .get_or_init(|| harfrust::Font::new(self.shared_data().clone(), self.face_index))
             .as_ref()
+    }
+
+    /// This face's colour tables, read on first use.
+    pub(crate) fn color_tables(&self) -> &ColorTables {
+        self.color_tables
+            .get_or_init(|| ColorTables::read(self.bytes(), self.face_index))
     }
 }
 
@@ -179,6 +189,7 @@ impl FontRegistry {
                 swash_cache_key: swash::CacheKey::new(),
                 is_system: true,
                 shaping_font: OnceLock::new(),
+                color_tables: OnceLock::new(),
             };
             let face_id = FontFaceId(self.fonts.len() as u32);
             self.fonts.push(Some(entry));
@@ -222,6 +233,7 @@ impl FontRegistry {
                 swash_cache_key,
                 is_system: false,
                 shaping_font: OnceLock::new(),
+                color_tables: OnceLock::new(),
             };
 
             let face_id = FontFaceId(self.fonts.len() as u32);
@@ -277,6 +289,7 @@ impl FontRegistry {
                     swash_cache_key,
                     is_system: false,
                     shaping_font: OnceLock::new(),
+                    color_tables: OnceLock::new(),
                 };
 
                 let face_id = FontFaceId(self.fonts.len() as u32);
@@ -336,6 +349,59 @@ impl FontRegistry {
         let entry = self.get(face_id)?;
         let face_info = self.fontdb.face(entry.fontdb_id)?;
         face_info.families.first().map(|(name, _)| name.clone())
+    }
+
+    /// The weight fontdb read for a face (its OS/2 weight class).
+    pub(crate) fn fontdb_weight(&self, fontdb_id: fontdb::ID) -> Option<u16> {
+        self.fontdb.face(fontdb_id).map(|info| info.weight.0)
+    }
+
+    /// The style and width (stretch) of `face_id`, from fontdb's metadata.
+    pub(crate) fn face_style(&self, face_id: FontFaceId) -> Option<(Style, Stretch)> {
+        let info = self.fontdb.face(self.get(face_id)?.fontdb_id)?;
+        Some((info.style, info.stretch))
+    }
+
+    /// The face of `face_id`'s family that fontdb's CSS matching picks for
+    /// `weight`, `style` and `stretch`: the family's Regular for regular
+    /// text, its Bold for bold. Reads metadata only.
+    ///
+    /// Glyph fallback finds a face by the first one that covers a character,
+    /// in the order the system lists its font files, and a family's Bold file
+    /// can come first (BIZ-UDGothicB.ttc sorts before BIZ-UDGothicR.ttc on
+    /// Windows): regular CJK text was set in bold beside regular Latin.
+    pub(crate) fn family_face_matching(
+        &self,
+        face_id: FontFaceId,
+        weight: u16,
+        style: Style,
+        stretch: Stretch,
+    ) -> Option<FontFaceId> {
+        let info = self.fontdb.face(self.get(face_id)?.fontdb_id)?;
+        let (family, _) = info.families.first()?;
+        let query = Query {
+            families: &[Family::Name(family)],
+            weight: Weight(weight),
+            stretch,
+            style,
+        };
+        self.fontdb_id_to_face_id(self.fontdb.query(&query)?)
+    }
+
+    /// Whether a family name of `face_id` contains "emoji", ignoring case.
+    /// Reads fontdb metadata only, so it opens no font file.
+    pub(crate) fn is_emoji_family(&self, face_id: FontFaceId) -> bool {
+        let Some(info) = self
+            .get(face_id)
+            .and_then(|e| self.fontdb.face(e.fontdb_id))
+        else {
+            return false;
+        };
+        info.families.iter().any(|(name, _)| {
+            name.as_bytes()
+                .windows(5)
+                .any(|w| w.eq_ignore_ascii_case(b"emoji"))
+        })
     }
 
     /// Look up a FontEntry by FontFaceId.
