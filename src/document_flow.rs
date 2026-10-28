@@ -738,6 +738,7 @@ impl DocumentFlow {
     /// the windowed and full paths shape a given block identically. The result
     /// is a plain value the caller may tint (set a fragment's
     /// `foreground_color`) before handing the window to `layout_window`.
+    #[cfg(feature = "text-document")]
     pub fn block_params_for(
         &self,
         block: &text_document::BlockSnapshot,
@@ -3096,6 +3097,7 @@ mod tests {
     /// — the per-block seam the windowed streaming path is built on. The text
     /// must round-trip so the shaped row matches the document.
     #[test]
+    #[cfg(feature = "text-document")]
     fn block_params_for_converts_a_document_snapshot() {
         let flow = DocumentFlow::new();
         let doc = text_document::TextDocument::new();
@@ -3117,6 +3119,7 @@ mod tests {
     /// echo char is the cheapest observable: with it set, the conversion masks
     /// the text.
     #[test]
+    #[cfg(feature = "text-document")]
     fn block_params_for_honours_the_flow_echo_char() {
         let mut flow = DocumentFlow::new();
         flow.set_echo_char(Some('•'));
