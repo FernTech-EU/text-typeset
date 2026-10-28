@@ -22,6 +22,15 @@ pub fn rasterize_glyph(
     font_weight: u32,
     hinted: bool,
 ) -> Option<GlyphImage> {
+    // swash paints COLRv0 layers and colour bitmaps, not COLRv1, which is
+    // painted here (see `crate::atlas::colr`). A face can carry both for one
+    // glyph, the COLRv0 layers for renderers without COLRv1: the COLRv1
+    // paint is the glyph as designed.
+    if let Some(image) = crate::atlas::colr::paint_colr_v1(font_data, face_index, glyph_id, size_px)
+    {
+        return Some(image);
+    }
+
     let base = FontRef::from_index(font_data, face_index as usize)?;
     let font_ref = FontRef {
         data: base.data,
@@ -44,13 +53,28 @@ pub fn rasterize_glyph(
         .variations(&[("wght", font_weight as f32)])
         .build();
 
-    let image = Render::new(&[
+    let mut image = Render::new(&[
         Source::ColorOutline(0),
         Source::ColorBitmap(StrikeWith::BestFit),
         Source::Outline,
     ])
     .format(Format::Alpha)
-    .render(&mut scaler, glyph_id)?;
+    .render(&mut scaler, glyph_id);
+
+    // A COLRv1 glyph the painter could not draw (a cycle of colour glyphs,
+    // malformed data) has, in the fonts that use COLRv1 (Noto Color Emoji as
+    // Fedora ships it), an empty outline beside its paint, so it would come
+    // out as nothing, which reads as a lost character. Draw the face's
+    // missing-glyph box in its place.
+    let drew_nothing = image
+        .as_ref()
+        .is_none_or(|img| img.placement.width == 0 || img.placement.height == 0);
+    if drew_nothing && crate::atlas::colr::has_colr_v1(font_data, face_index, glyph_id) {
+        image = Render::new(&[Source::Outline])
+            .format(Format::Alpha)
+            .render(&mut scaler, 0);
+    }
+    let image = image?;
 
     let is_color = matches!(image.content, swash::scale::image::Content::Color);
 

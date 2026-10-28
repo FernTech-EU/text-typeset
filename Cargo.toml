@@ -35,6 +35,12 @@ hyphenation-all-languages = ["hypher/default"]
 [dependencies]
 harfrust = "0.14.0"
 swash = "0.2.10"
+# COLRv1 paint traversal (src/atlas/colr.rs). The version swash already
+# builds against, so it compiles nothing new.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+# Painting COLRv1: clip masks, gradients (linear, two-point conical, sweep)
+# and Skia's blend modes, which are the COLRv1 composite modes.
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 fontdb = "0.24.0"
 # OS/2 unicode-range + cmap reader for font writing-system (script)
 # classification. Resolves to the exact version already pulled in

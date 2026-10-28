@@ -1,5 +1,6 @@
 pub mod allocator;
 pub mod cache;
+pub(crate) mod colr;
 pub mod rasterizer;
 
 use allocator::GlyphAtlas;

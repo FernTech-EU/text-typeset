@@ -33,7 +33,7 @@ Put the service behind whatever smart pointer your host framework uses (an `Rc<R
 
 - **Text shaping** via [harfrust](https://crates.io/crates/harfrust) (Rust port of HarfBuzz) with OpenType feature support
 - **Font management** via [fontdb](https://crates.io/crates/fontdb) with CSS-spec font matching, generic family mapping, and glyph fallback
-- **Glyph rasterization** via [swash](https://crates.io/crates/swash) with color emoji support (COLR/CBDT)
+- **Glyph rasterization** via [swash](https://crates.io/crates/swash), with color emoji in COLRv0, CBDT and sbix, and COLRv1 painted with [skrifa](https://crates.io/crates/skrifa) and [tiny-skia](https://crates.io/crates/tiny-skia)
 - **Glyph atlas** backed by [etagere](https://crates.io/crates/etagere) shelf packing with auto-grow and LRU eviction — shared across every widget through the `TextFontService`
 - **Paragraph layout** with line breaking ([icu_segmenter](https://crates.io/crates/icu_segmenter), UAX #14), four alignment modes (left, right, center, justify), and first-line indent
 - **Hyphenation** via [hypher](https://crates.io/crates/hypher), Western European languages by default (`hyphenation-all-languages` for every language hypher ships), plus soft-hyphen breaking
