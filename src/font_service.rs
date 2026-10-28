@@ -255,10 +255,18 @@ impl TextFontService {
     /// paragraph, win over this one; with none of the three, Simplified
     /// Chinese. A tag that names no CJK language, or `None`, sets none.
     ///
-    /// Applies to text laid out after the call: lay a flow out again for its
-    /// text to change.
+    /// A change marks every flow laid out against this service as stale, as
+    /// a scale factor change does: [`scale_generation`](Self::scale_generation)
+    /// moves, so [`DocumentFlow::layout_dirty_for_scale`] answers true until
+    /// the flow is laid out again. Setting the language it already has
+    /// changes nothing.
+    ///
+    /// [`DocumentFlow::layout_dirty_for_scale`]: crate::DocumentFlow::layout_dirty_for_scale
     pub fn set_default_language(&mut self, language: Option<&str>) {
-        self.font_registry.set_default_language(language);
+        if self.font_registry.set_default_language(language) {
+            // Shaped runs chose their fallback faces by the old language.
+            self.scale_generation = self.scale_generation.wrapping_add(1);
+        }
     }
 
     /// Map a generic family name (e.g. `"serif"`, `"monospace"`) to a
@@ -415,7 +423,9 @@ impl TextFontService {
     }
 
     /// Monotonic counter bumped by every successful
-    /// [`set_scale_factor`](Self::set_scale_factor) call.
+    /// [`set_scale_factor`](Self::set_scale_factor) call, and by every
+    /// [`set_default_language`](Self::set_default_language) that changes the
+    /// language.
     ///
     /// `DocumentFlow` snapshots this during layout so the framework
     /// can ask whether a flow needs to be re-laid out after a HiDPI

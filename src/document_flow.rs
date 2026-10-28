@@ -3086,6 +3086,26 @@ mod tests {
     }
 
     #[test]
+    fn a_change_of_default_language_marks_the_flow_stale() {
+        let mut svc = service();
+        let mut flow = DocumentFlow::new();
+        flow.set_viewport(400.0, 200.0);
+        flow.layout_blocks(&svc, vec![block(1, "Hello")]);
+
+        // A language that names no CJK language sets none: no change.
+        svc.set_default_language(Some("fr-FR"));
+        assert!(!flow.layout_dirty_for_scale(&svc));
+
+        svc.set_default_language(Some("ja-JP"));
+        assert!(flow.layout_dirty_for_scale(&svc));
+        flow.layout_blocks(&svc, vec![block(1, "Hello")]);
+
+        // The language it already has changes nothing.
+        svc.set_default_language(Some("ja"));
+        assert!(!flow.layout_dirty_for_scale(&svc));
+    }
+
+    #[test]
     fn relayout_block_succeeds_after_fresh_layout_post_scale_change() {
         let mut svc = service();
         let mut flow = DocumentFlow::new();

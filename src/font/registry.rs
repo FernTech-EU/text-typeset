@@ -353,8 +353,12 @@ impl FontRegistry {
     /// Set the language Han characters are drawn for when neither their
     /// block nor the kana or hangul around them says (see
     /// [`TextFontService::set_default_language`](crate::TextFontService::set_default_language)).
-    pub(crate) fn set_default_language(&mut self, language: Option<&str>) {
-        self.default_language = language.and_then(CjkLanguage::from_tag);
+    /// Returns whether the language changed.
+    pub(crate) fn set_default_language(&mut self, language: Option<&str>) -> bool {
+        let language = language.and_then(CjkLanguage::from_tag);
+        let changed = language != self.default_language;
+        self.default_language = language;
+        changed
     }
 
     pub(crate) fn default_language(&self) -> Option<CjkLanguage> {
