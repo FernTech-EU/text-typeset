@@ -11,6 +11,7 @@ use crate::font::synthesis::{self, FaceSynthesis};
 /// `a_synthetic_bold_glyph_is_as_much_wider_as_its_advance`).
 const EMBOLDEN_TO_SWASH: f32 = 0.5;
 
+#[non_exhaustive]
 pub struct GlyphImage {
     pub width: u32,
     pub height: u32,

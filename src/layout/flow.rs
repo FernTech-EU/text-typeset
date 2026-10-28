@@ -43,6 +43,7 @@ pub enum FlowItem {
 /// `origin_y + block.y`. For a block in the document's own column both
 /// origins are zero and `block.y` is already absolute — which is what keeps
 /// this a widening of the old lookup rather than a change to it.
+#[non_exhaustive]
 pub struct ResolvedBlock<'a> {
     pub block: &'a BlockLayout,
     /// Document-space x of the left edge of the block's content column.
@@ -55,6 +56,7 @@ pub struct ResolvedBlock<'a> {
 ///
 /// `TableLayout::column_xs` and `row_ys` are measured from here, so cell
 /// `(r, c)` sits at `(origin_x + column_xs[c], origin_y + row_ys[r])`.
+#[non_exhaustive]
 pub struct ResolvedTable<'a> {
     pub table: &'a TableLayout,
     pub origin_x: f32,

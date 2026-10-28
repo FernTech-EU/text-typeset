@@ -25,6 +25,7 @@ pub struct CellLayoutParams {
 }
 
 /// Computed layout for an entire table.
+#[non_exhaustive]
 pub struct TableLayout {
     pub table_id: usize,
     /// Y position relative to document start (set by flow).
@@ -47,6 +48,7 @@ pub struct TableLayout {
     pub cell_padding: f32,
 }
 
+#[non_exhaustive]
 pub struct CellLayout {
     pub row: usize,
     pub column: usize,

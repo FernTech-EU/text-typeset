@@ -677,6 +677,7 @@ fn widen_for_synthetic_bold(glyphs: &mut [ShapedGlyph], size_px: f32) -> f32 {
     glyphs.iter().map(|g| g.x_advance).sum()
 }
 
+#[non_exhaustive]
 pub struct FontMetricsPx {
     pub ascent: f32,
     pub descent: f32,
@@ -709,6 +710,7 @@ pub fn font_metrics_px(registry: &FontRegistry, resolved: &ResolvedFont) -> Opti
 }
 
 /// A bidi run: a contiguous range of text with the same direction.
+#[non_exhaustive]
 pub struct BidiRun {
     pub byte_range: std::ops::Range<usize>,
     pub direction: TextDirection,
@@ -733,6 +735,7 @@ pub struct BidiRun {
 /// decided where the lines fall, and only then get reordered *per line*.
 /// Reordering the paragraph up front and breaking afterwards would
 /// scramble any paragraph that wraps.
+#[non_exhaustive]
 pub struct BidiParagraph {
     /// Runs of uniform embedding level, in logical order.
     pub runs: Vec<BidiRun>,

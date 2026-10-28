@@ -4,6 +4,7 @@ use crate::shaping::shaper::TextDirection;
 use crate::types::FontFaceId;
 
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ShapedGlyph {
     pub glyph_id: u16,
     pub cluster: u32,
@@ -17,6 +18,7 @@ pub struct ShapedGlyph {
 }
 
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ShapedRun {
     pub font_face_id: FontFaceId,
     pub size_px: f32,

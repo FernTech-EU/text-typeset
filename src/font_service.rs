@@ -67,6 +67,7 @@ use crate::types::{FontFaceId, TextFormat};
 /// Exposed as a struct rather than a tuple so every caller names
 /// fields explicitly and can't swap positions silently.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct AtlasSnapshot<'a> {
     /// True if the atlas texture has pending pixel changes
     /// since it was last marked clean. The snapshot call clears

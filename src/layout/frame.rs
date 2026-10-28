@@ -83,6 +83,7 @@ pub enum FrameChildRef {
 }
 
 /// Computed layout for a frame.
+#[non_exhaustive]
 pub struct FrameLayout {
     pub frame_id: usize,
     pub y: f32,

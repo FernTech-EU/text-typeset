@@ -131,6 +131,7 @@ pub fn convert_flow_with(flow: &FlowSnapshot, opts: &BridgeOptions) -> FlowEleme
 }
 
 /// Converted flow elements, ordered by their position in the flow.
+#[non_exhaustive]
 pub struct FlowElements {
     /// (flow_index, params)
     pub blocks: Vec<(usize, BlockLayoutParams)>,

@@ -43,6 +43,7 @@ fn pick_by_affinity<'a>(
 }
 
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct LayoutLine {
     pub runs: Vec<PositionedRun>,
     /// Baseline y relative to block top (set by block layout).
@@ -242,6 +243,7 @@ impl LayoutLine {
 }
 
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct PositionedRun {
     pub shaped_run: ShapedRun,
     /// X offset from the left edge of the content area.
@@ -252,6 +254,7 @@ pub struct PositionedRun {
 
 /// Text decoration flags and metadata carried from the source TextFormat.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct RunDecorations {
     pub underline_style: crate::types::UnderlineStyle,
     pub overline: bool,

@@ -5,6 +5,7 @@ use etagere::AllocId;
 use crate::types::FontFaceId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct GlyphCacheKey {
     pub font_face_id: FontFaceId,
     pub glyph_id: u16,
@@ -90,6 +91,7 @@ pub struct CachedGlyph {
 /// off the eviction; the rect lets debug builds poison-fill freed pixels
 /// so stale-UV sampling is visually unmistakable.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct EvictedGlyph {
     pub alloc_id: AllocId,
     pub atlas_x: u32,

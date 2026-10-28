@@ -10,6 +10,7 @@ use crate::shaping::shaper::{
 
 /// Computed layout for a single block (paragraph).
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct BlockLayout {
     pub block_id: usize,
     /// Document character position of the block start.
@@ -39,6 +40,7 @@ pub struct BlockLayout {
 
 /// A shaped list marker ready for rendering.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ShapedListMarker {
     pub run: ShapedRun,
     /// X position of the marker (relative to block left edge, before content indent).

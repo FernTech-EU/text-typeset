@@ -71,6 +71,7 @@ pub struct RenderFrame {
 /// The adapter draws the rectangle at `screen` position, sampling from
 /// the `atlas` rectangle in the atlas texture, tinted with `color`.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct GlyphQuad {
     /// Screen position and size: `[x, y, width, height]` in pixels.
     pub screen: [f32; 4],
@@ -93,6 +94,7 @@ pub struct GlyphQuad {
 /// the image. The adapter retrieves the image data (e.g., from
 /// `TextDocument::resource(name)`) and draws it as a separate texture.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ImageQuad {
     /// Screen position and size: `[x, y, width, height]` in pixels.
     pub screen: [f32; 4],
@@ -107,8 +109,22 @@ pub struct ImageQuad {
     pub char_offset: usize,
 }
 
+impl ImageQuad {
+    /// An image placement: `screen` as `[x, y, width, height]`, the resource
+    /// `name`, and the `char_offset` of its `U+FFFC`. For a host that stands
+    /// in for the typesetter, a test for instance.
+    pub fn new(screen: [f32; 4], name: impl Into<String>, char_offset: usize) -> Self {
+        Self {
+            screen,
+            name: name.into(),
+            char_offset,
+        }
+    }
+}
+
 /// A colored rectangle for decorations (underlines, selections, borders, etc.).
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct DecorationRect {
     /// Screen position and size: `[x, y, width, height]` in pixels.
     pub rect: [f32; 4],
@@ -212,6 +228,7 @@ pub enum CursorAffinity {
 
 /// Result of [`crate::DocumentFlow::hit_test`] - maps a screen-space point to a
 /// document position.
+#[non_exhaustive]
 pub struct HitTestResult {
     /// Absolute character position in the document.
     pub position: usize,
@@ -297,6 +314,7 @@ pub struct CursorDisplay {
 /// document-space top-left of the whole table box; `column_xs` and `row_ys`
 /// are measured from that origin, so cell `(r, c)` occupies
 /// `(x + column_xs[c], y + row_ys[r], column_content_widths[c], row_heights[r])`.
+#[non_exhaustive]
 pub struct TableVisualInfo {
     /// Table ID (matches `TableSnapshot::table_id`).
     pub table_id: usize,
@@ -321,6 +339,7 @@ pub struct TableVisualInfo {
 /// Visual position and size of a laid-out block.
 ///
 /// Returned by [`crate::DocumentFlow::block_visual_info`].
+#[non_exhaustive]
 pub struct BlockVisualInfo {
     /// Block ID (matches `BlockSnapshot::block_id`).
     pub block_id: usize,
@@ -439,6 +458,7 @@ pub struct TextFormat {
 /// Contains the measured dimensions and GPU-ready glyph quads for a
 /// single line of text. No flow layout, line breaking, or bidi analysis
 /// is performed.
+#[non_exhaustive]
 pub struct SingleLineResult {
     /// Total advance width of the shaped text, in pixels.
     pub width: f32,
@@ -472,6 +492,7 @@ pub struct SingleLineResult {
 /// `LaidOutSpan` entries sharing the same URL and byte_range but with
 /// distinct `line_index` / `rect`.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LaidOutSpan {
     pub kind: LaidOutSpanKind,
     /// Which wrapped line this span piece lives on (0 for single-line).
@@ -497,6 +518,7 @@ pub enum LaidOutSpanKind {
 /// paragraph, `y = 0` is the top of the first line's line box. The
 /// adapter should offset all glyph quads by the paragraph's screen
 /// position before drawing.
+#[non_exhaustive]
 pub struct ParagraphResult {
     /// Width of the widest laid-out line, in pixels. May be less than the
     /// `max_width` passed to `layout_paragraph` if the content is narrower.
@@ -566,6 +588,7 @@ impl RenderFrame {
 /// subsequent characters accumulate their advance widths. `width` is
 /// the advance width of each character, in the same units.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct CharacterGeometry {
     pub position: f32,
     pub width: f32,
@@ -644,6 +667,7 @@ pub(crate) fn is_hard_break(c: char) -> bool {
 /// Where a line's trailing ellipsis was drawn, for a line the layout
 /// truncated.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct LineTruncation {
     /// Leading edge of the ellipsis glyph, in layout-local coordinates.
     pub ellipsis_x: f32,
@@ -656,6 +680,7 @@ pub struct LineTruncation {
 /// A pure LTR or pure RTL line has exactly one segment; a bidirectional
 /// line has one per direction change, in *logical* order.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct LineSegment {
     /// Byte range of this segment in the source text (or, on the markup
     /// paths, in [`LayoutGeometry::rendered_text`]).
@@ -682,6 +707,7 @@ pub struct LineSegment {
 
 /// One laid-out visual line.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct LineGeometry {
     /// Zero-based index of this line within the layout.
     pub index: usize,
@@ -713,6 +739,7 @@ pub struct LineGeometry {
 
 /// One hyperlink in a markup layout, reported against the rendered text.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct LinkGeometry {
     /// Byte range of the link's label in
     /// [`LayoutGeometry::rendered_text`] — *not* in the markup source.
@@ -728,6 +755,7 @@ pub struct LinkGeometry {
 /// [`rendered_text`](Self::rendered_text) when that is `Some` (the markup
 /// paths) and the caller's source text otherwise.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct LayoutGeometry {
     /// One entry per emitted line, in visual top-to-bottom order.
     pub lines: Vec<LineGeometry>,

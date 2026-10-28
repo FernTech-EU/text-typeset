@@ -20,11 +20,23 @@ use crate::types::FontFaceId;
 /// fontdb metadata, so producing a whole [`Vec<FontFamilyInfo>`] loads no
 /// font bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FontFamilyInfo {
     /// Primary family name (e.g. `"DejaVu Sans"`).
     pub name: String,
     /// True if any face of the family is monospaced.
     pub monospaced: bool,
+}
+
+impl FontFamilyInfo {
+    /// A family entry, for a host that lists families of its own (a font
+    /// picker given a fixed list, a test).
+    pub fn new(name: impl Into<String>, monospaced: bool) -> Self {
+        Self {
+            name: name.into(),
+            monospaced,
+        }
+    }
 }
 
 /// Byte container owned by a [`FontEntry`]. Erased behind a trait

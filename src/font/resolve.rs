@@ -3,6 +3,7 @@ use crate::font::registry::FontRegistry;
 use crate::types::FontFaceId;
 
 /// A resolved font face with all parameters needed for shaping and rasterization.
+#[non_exhaustive]
 pub struct ResolvedFont {
     pub font_face_id: FontFaceId,
     pub size_px: f32,

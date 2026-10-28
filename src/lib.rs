@@ -69,6 +69,17 @@
 //! `set_viewport`, `set_zoom`, `set_scroll_offset`, or `set_cursor`
 //! live on A's flow and never touch B's.
 //!
+//! # Values the crate hands out
+//!
+//! The plain-data structs this crate builds and a host reads (the render
+//! frame's quads, hit-test results, the geometry and layout results, shaped
+//! runs, glyph cache keys and the like) are `#[non_exhaustive]`: read their
+//! fields, and build one only through its constructor where it has one
+//! (`GlyphCacheKey::new` and `with_style`, `ImageQuad::new`,
+//! `FontFamilyInfo::new`). A field added to them is not a breaking change.
+//! The structs a host builds to hand in (`TextFormat`, `CursorDisplay`, the
+//! layout parameter structs) stay open to struct literals.
+//!
 //! # Features
 //!
 //! - `text-document` (default): enables [`bridge`] module and
