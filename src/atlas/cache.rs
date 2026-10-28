@@ -19,6 +19,10 @@ pub struct GlyphCacheKey {
     /// and 14px at raster_scale 1 share `size_bits` but must not share
     /// a bitmap.
     pub hinted: bool,
+    /// Whether the text asks for italic: an upright face is rasterized
+    /// slanted for it (see `crate::font::synthesis`), and the slanted bitmap
+    /// must not stand in for the upright one.
+    pub italic: bool,
 }
 
 impl GlyphCacheKey {
@@ -29,6 +33,7 @@ impl GlyphCacheKey {
             size_bits: size_px.to_bits(),
             weight: 400,
             hinted: true,
+            italic: false,
         }
     }
 
@@ -45,6 +50,23 @@ impl GlyphCacheKey {
             size_bits: size_px.to_bits(),
             weight,
             hinted,
+            italic: false,
+        }
+    }
+
+    /// [`with_weight`](Self::with_weight) for text that asks for italic when
+    /// `italic`.
+    pub fn with_style(
+        font_face_id: FontFaceId,
+        glyph_id: u16,
+        size_px: f32,
+        weight: u32,
+        hinted: bool,
+        italic: bool,
+    ) -> Self {
+        Self {
+            italic,
+            ..Self::with_weight(font_face_id, glyph_id, size_px, weight, hinted)
         }
     }
 }

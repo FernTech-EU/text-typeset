@@ -243,6 +243,7 @@ pub fn layout_block(
                 font_face_id: crate::types::FontFaceId(0),
                 size_px: 0.0,
                 weight: 400,
+                italic: false,
                 glyphs: vec![image_glyph],
                 advance_width: frag.image_width,
                 text_range: frag.offset..frag.offset + frag.text.len(),
@@ -860,6 +861,7 @@ fn get_default_metrics(
                 .unwrap_or_default(),
             scale_factor,
             weight: 400,
+            italic: false,
         };
         if let Some(m) = font_metrics_px(registry, &resolved) {
             return m;

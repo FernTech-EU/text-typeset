@@ -2791,7 +2791,7 @@ fn rasterize_glyph_quad(
     glyph_keys: &mut Vec<crate::atlas::cache::GlyphCacheKey>,
 ) {
     use crate::atlas::cache::GlyphCacheKey;
-    use crate::atlas::rasterizer::rasterize_glyph;
+    use crate::atlas::rasterizer::rasterize_glyph_styled;
 
     if glyph.glyph_id == 0 {
         return;
@@ -2811,16 +2811,17 @@ fn rasterize_glyph_quad(
     let sf = service.scale_factor.max(f32::MIN_POSITIVE);
     let inv_total = 1.0 / (sf * raster_scale);
     let physical_size_px = run.size_px * sf * raster_scale;
-    let cache_key = GlyphCacheKey::with_weight(
+    let cache_key = GlyphCacheKey::with_style(
         glyph.font_face_id,
         glyph.glyph_id,
         physical_size_px,
         run.weight as u32,
         hinted,
+        run.italic,
     );
 
     if service.glyph_cache.peek(&cache_key).is_none()
-        && let Some(image) = rasterize_glyph(
+        && let Some(image) = rasterize_glyph_styled(
             &mut service.scale_context,
             entry.bytes(),
             entry.face_index,
@@ -2829,6 +2830,7 @@ fn rasterize_glyph_quad(
             physical_size_px,
             run.weight as u32,
             hinted,
+            run.italic,
         )
         && image.width > 0
         && image.height > 0

@@ -1,6 +1,6 @@
 use crate::atlas::allocator::GlyphAtlas;
 use crate::atlas::cache::{CachedGlyph, GlyphCache, GlyphCacheKey};
-use crate::atlas::rasterizer::rasterize_glyph;
+use crate::atlas::rasterizer::rasterize_glyph_styled;
 use crate::font::registry::FontRegistry;
 use crate::layout::block::BlockLayout;
 use crate::layout::flow::{FlowItem, FlowLayout};
@@ -832,12 +832,13 @@ fn render_run_glyphs(
             }
         };
 
-        let cache_key = GlyphCacheKey::with_weight(
+        let cache_key = GlyphCacheKey::with_style(
             glyph.font_face_id,
             glyph.glyph_id,
             physical_size_px,
             run.weight as u32,
             hinted,
+            run.italic,
         );
         ensure_glyph_cached(
             &cache_key,
@@ -905,7 +906,7 @@ fn ensure_glyph_cached(
         return;
     }
 
-    let image = match rasterize_glyph(
+    let image = match rasterize_glyph_styled(
         scale_context,
         font_data,
         face_index,
@@ -914,6 +915,7 @@ fn ensure_glyph_cached(
         size_px,
         font_weight,
         key.hinted,
+        key.italic,
     ) {
         Some(img) => img,
         None => return,

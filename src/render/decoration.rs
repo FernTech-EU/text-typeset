@@ -135,6 +135,7 @@ fn get_run_metrics(
         swash_cache_key: entry.swash_cache_key,
         scale_factor,
         weight: 400,
+        italic: false,
     };
     font_metrics_px(registry, &resolved).unwrap_or_else(fallback_metrics)
 }

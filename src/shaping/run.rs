@@ -24,6 +24,9 @@ pub struct ShapedRun {
     /// rasterizer so variable-font `wght` axis is set correctly and
     /// the glyph cache key distinguishes different weights.
     pub weight: u16,
+    /// Whether the run asks for italic, passed to the glyph rasterizer, which
+    /// slants a face that has no italic, and to the glyph cache key.
+    pub italic: bool,
     pub glyphs: Vec<ShapedGlyph>,
     pub advance_width: f32,
     pub text_range: Range<usize>,

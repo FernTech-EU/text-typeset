@@ -18,6 +18,10 @@ pub struct ResolvedFont {
     /// the glyph cache key so different weights produce separate
     /// rasterized bitmaps.
     pub weight: u16,
+    /// Whether the text asks for italic. A face that has no italic draws it
+    /// with a synthetic slant (see `crate::font::synthesis`); the glyph cache
+    /// keys on it.
+    pub italic: bool,
 }
 
 /// Resolve a font from text formatting parameters.
@@ -60,6 +64,7 @@ pub fn resolve_font(
                 swash_cache_key: entry.swash_cache_key,
                 scale_factor,
                 weight,
+                italic,
             });
         }
         // A family was explicitly requested but is not registered. Warn once
@@ -86,6 +91,7 @@ pub fn resolve_font(
             swash_cache_key: variant_entry.swash_cache_key,
             scale_factor,
             weight,
+            italic,
         });
     }
     let entry = registry.get(default_id)?;
@@ -96,6 +102,7 @@ pub fn resolve_font(
         swash_cache_key: entry.swash_cache_key,
         scale_factor,
         weight,
+        italic,
     })
 }
 

@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use fontdb::{Database, Family, Query, Source, Stretch, Style, Weight};
 
 use crate::font::color::ColorTables;
+use crate::font::synthesis::FaceSynthesis;
 use crate::font::writing_system_index::{
     FaceBytes, FaceRef, WritingSystemIndexBuilder, build_from_faces,
 };
@@ -69,6 +70,9 @@ pub struct FontEntry {
     /// The face's colour tables, read on first use by glyph fallback or the
     /// rasterizer (see [`crate::font::color`]).
     color_tables: OnceLock<ColorTables>,
+    /// The face's weight and slant, read on first use by the shaper (see
+    /// [`crate::font::synthesis`]).
+    synthesis: OnceLock<FaceSynthesis>,
 }
 
 impl FontEntry {
@@ -102,6 +106,14 @@ impl FontEntry {
         self.shaping_font
             .get_or_init(|| harfrust::Font::new(self.shared_data().clone(), self.face_index))
             .as_ref()
+    }
+
+    /// What this face can draw for real and what is synthesized on it (see
+    /// [`crate::font::synthesis`]), read on first use.
+    pub(crate) fn synthesis(&self) -> FaceSynthesis {
+        *self
+            .synthesis
+            .get_or_init(|| FaceSynthesis::read(self.bytes(), self.face_index))
     }
 
     /// This face's colour tables, read on first use.
@@ -190,6 +202,7 @@ impl FontRegistry {
                 is_system: true,
                 shaping_font: OnceLock::new(),
                 color_tables: OnceLock::new(),
+                synthesis: OnceLock::new(),
             };
             let face_id = FontFaceId(self.fonts.len() as u32);
             self.fonts.push(Some(entry));
@@ -234,6 +247,7 @@ impl FontRegistry {
                 is_system: false,
                 shaping_font: OnceLock::new(),
                 color_tables: OnceLock::new(),
+                synthesis: OnceLock::new(),
             };
 
             let face_id = FontFaceId(self.fonts.len() as u32);
@@ -290,6 +304,7 @@ impl FontRegistry {
                     is_system: false,
                     shaping_font: OnceLock::new(),
                     color_tables: OnceLock::new(),
+                    synthesis: OnceLock::new(),
                 };
 
                 let face_id = FontFaceId(self.fonts.len() as u32);

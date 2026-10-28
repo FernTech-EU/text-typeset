@@ -5,6 +5,7 @@ use crate::font::registry::FontRegistry;
 use crate::font::resolve::{
     FaceStyle, Presentation, ResolvedFont, face_covers, find_fallback_face,
 };
+use crate::font::synthesis;
 use crate::shaping::emoji;
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
 use crate::types::FontFaceId;
@@ -336,6 +337,7 @@ fn apply_glyph_fallback(
                 swash_cache_key: entry.swash_cache_key,
                 scale_factor: primary.scale_factor,
                 weight: primary.weight,
+                italic: primary.italic,
             };
             // Clusters come back local to `slice`.
             let run = shape_text_directed(
@@ -526,11 +528,15 @@ pub fn shape_text_directed(
 
         total_advance += x_advance;
     }
+    if entry.synthesis().synthesizes_bold(resolved.weight) {
+        total_advance = widen_for_synthetic_bold(&mut glyphs, resolved.size_px);
+    }
 
     Some(ShapedRun {
         font_face_id: resolved.font_face_id,
         size_px: resolved.size_px,
         weight: resolved.weight,
+        italic: resolved.italic,
         glyphs,
         advance_width: total_advance,
         text_range: text_offset..text_offset + text.len(),
@@ -619,11 +625,15 @@ pub fn shape_text_with_buffer(
 
         total_advance += x_advance;
     }
+    if entry.synthesis().synthesizes_bold(resolved.weight) {
+        total_advance = widen_for_synthetic_bold(&mut glyphs, resolved.size_px);
+    }
 
     let run = ShapedRun {
         font_face_id: resolved.font_face_id,
         size_px: resolved.size_px,
         weight: resolved.weight,
+        italic: resolved.italic,
         glyphs,
         advance_width: total_advance,
         text_range: text_offset..text_offset + text.len(),
@@ -653,6 +663,18 @@ pub fn shape_text_with_buffer(
     // drops the contents and segment properties.
     buffer.clear();
     Some((run, buffer))
+}
+
+/// Widen every advancing glyph by what synthetic bold adds to its outline
+/// (see [`crate::font::synthesis`]), so the layout, the caret and hit testing
+/// measure the glyph as the rasterizer draws it. Returns the run's new
+/// advance.
+fn widen_for_synthetic_bold(glyphs: &mut [ShapedGlyph], size_px: f32) -> f32 {
+    let extra = synthesis::embolden_strength(size_px);
+    for glyph in glyphs.iter_mut().filter(|g| g.x_advance > 0.0) {
+        glyph.x_advance += extra;
+    }
+    glyphs.iter().map(|g| g.x_advance).sum()
 }
 
 pub struct FontMetricsPx {
