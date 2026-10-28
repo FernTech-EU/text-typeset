@@ -246,6 +246,21 @@ impl TextFontService {
         self.font_registry.set_default_font(face, size_px);
     }
 
+    /// Set the language, as a BCP 47 tag (`"ja"`, `"zh-TW"`), that Chinese
+    /// characters a fallback font draws are drawn for when their text does
+    /// not say: a host passes its UI locale. The same character is drawn
+    /// differently in Japanese, Simplified Chinese, Traditional Chinese and
+    /// Korean, so glyph fallback picks a face for one of them. The language
+    /// of the character's block, then the kana or hangul nearest to it in its
+    /// paragraph, win over this one; with none of the three, Simplified
+    /// Chinese. A tag that names no CJK language, or `None`, sets none.
+    ///
+    /// Applies to text laid out after the call: lay a flow out again for its
+    /// text to change.
+    pub fn set_default_language(&mut self, language: Option<&str>) {
+        self.font_registry.set_default_language(language);
+    }
+
     /// Map a generic family name (e.g. `"serif"`, `"monospace"`) to a
     /// concrete registered family. When text-document emits a fragment
     /// whose `font_family` matches a generic, the font resolver looks

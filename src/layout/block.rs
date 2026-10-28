@@ -1,11 +1,12 @@
 use crate::font::registry::FontRegistry;
 use crate::font::resolve::{ResolvedFont, resolve_font};
+use crate::font::script_fallback::{CjkLanguage, ScriptContext};
 use crate::layout::line::LayoutLine;
 use crate::layout::paragraph::{Alignment, Hyphenator, RunOrder, break_into_lines};
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
 use crate::shaping::shaper::{
     BidiParagraph, FontMetricsPx, TextDirection, analyze_paragraph, font_metrics_px, shape_text,
-    shape_text_with_fallback, to_harfrust_features,
+    shape_text_in_paragraph, shape_text_with_fallback, to_harfrust_features,
 };
 
 /// Computed layout for a single block (paragraph).
@@ -222,6 +223,15 @@ pub fn layout_block(
     // characters on *both* sides of it, which a per-fragment analysis
     // cannot see.
     let bidi = analyze_paragraph(&params.text, params.base_direction);
+    // The paragraph, and the language the block is in (the only one it
+    // carries is its hyphenation's), decide the faces glyph fallback prefers
+    // for Han.
+    let script_context = ScriptContext::new(
+        &params.text,
+        params
+            .hyphenation
+            .and_then(|h| CjkLanguage::from_tag(std::str::from_utf8(&h.language).ok()?)),
+    );
     let base_direction = bidi.base_direction();
 
     // Resolve fonts and shape each fragment
@@ -398,8 +408,15 @@ pub fn layout_block(
                     continue;
                 }
 
-                if let Some(mut run) = shape_text_with_fallback(
-                    registry, &resolved, piece, span.start, direction, &features,
+                if let Some(mut run) = shape_text_in_paragraph(
+                    registry,
+                    &resolved,
+                    piece,
+                    span.start,
+                    direction,
+                    &features,
+                    &script_context,
+                    span.start,
                 ) {
                     run.bidi_level = level;
                     run.underline_style = frag.underline_style;

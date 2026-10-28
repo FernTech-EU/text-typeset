@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use fontdb::{Database, Family, Query, Source, Stretch, Style, Weight};
 
 use crate::font::color::ColorTables;
+use crate::font::script_fallback::{CjkLanguage, Platform};
 use crate::font::synthesis::FaceSynthesis;
 use crate::font::writing_system_index::{
     FaceBytes, FaceRef, WritingSystemIndexBuilder, build_from_faces,
@@ -144,6 +145,12 @@ pub struct FontRegistry {
     generic_families: HashMap<String, String>,
     default_font: Option<FontFaceId>,
     default_size_px: f32,
+    /// The language Han is drawn for when nothing in its text says (see
+    /// [`crate::font::script_fallback`]).
+    default_language: Option<CjkLanguage>,
+    /// Whose faces the fallback table names: this system's, or another's in
+    /// a test.
+    fallback_platform: Platform,
 }
 
 impl Default for FontRegistry {
@@ -178,6 +185,8 @@ impl FontRegistry {
             generic_families: HashMap::new(),
             default_font: None,
             default_size_px: 16.0,
+            default_language: None,
+            fallback_platform: Platform::CURRENT,
         }
     }
 
@@ -341,6 +350,26 @@ impl FontRegistry {
         self.default_size_px
     }
 
+    /// Set the language Han characters are drawn for when neither their
+    /// block nor the kana or hangul around them says (see
+    /// [`TextFontService::set_default_language`](crate::TextFontService::set_default_language)).
+    pub(crate) fn set_default_language(&mut self, language: Option<&str>) {
+        self.default_language = language.and_then(CjkLanguage::from_tag);
+    }
+
+    pub(crate) fn default_language(&self) -> Option<CjkLanguage> {
+        self.default_language
+    }
+
+    pub(crate) fn fallback_platform(&self) -> Platform {
+        self.fallback_platform
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_fallback_platform(&mut self, platform: Platform) {
+        self.fallback_platform = platform;
+    }
+
     pub fn set_generic_family(&mut self, generic: &str, family: &str) {
         self.generic_families
             .insert(generic.to_string(), family.to_string());
@@ -406,6 +435,25 @@ impl FontRegistry {
     ) -> Option<FontFaceId> {
         let info = self.fontdb.face(self.get(face_id)?.fontdb_id)?;
         let (family, _) = info.families.first()?;
+        let query = Query {
+            families: &[Family::Name(family)],
+            weight: Weight(weight),
+            stretch,
+            style,
+        };
+        self.fontdb_id_to_face_id(self.fontdb.query(&query)?)
+    }
+
+    /// The face of the family named `family` (any of its names, as fontdb
+    /// read them) that fontdb's CSS matching picks for `weight`, `style` and
+    /// `stretch`. Reads metadata only.
+    pub(crate) fn family_face(
+        &self,
+        family: &str,
+        weight: u16,
+        style: Style,
+        stretch: Stretch,
+    ) -> Option<FontFaceId> {
         let query = Query {
             families: &[Family::Name(family)],
             weight: Weight(weight),

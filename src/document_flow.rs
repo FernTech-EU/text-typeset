@@ -44,6 +44,7 @@
 
 use crate::TextFontService;
 use crate::font::resolve::resolve_font;
+use crate::font::script_fallback::ScriptContext;
 use crate::layout::block::BlockLayoutParams;
 use crate::layout::flow::{FlowItem, FlowLayout};
 use crate::layout::frame::FrameLayoutParams;
@@ -52,7 +53,7 @@ use crate::layout::paragraph::{Alignment, Hyphenator, RunOrder, break_into_lines
 use crate::layout::table::TableLayoutParams;
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
 use crate::shaping::shaper::{
-    TextDirection, bidi_runs, font_metrics_px, shape_text, shape_text_with_fallback,
+    TextDirection, bidi_runs, font_metrics_px, shape_text, shape_text_in_paragraph,
     to_harfrust_features,
 };
 use crate::types::{
@@ -1290,13 +1291,15 @@ impl DocumentFlow {
             .into_iter()
             .filter_map(|br| {
                 let slice = text.get(br.byte_range.clone())?;
-                shape_text_with_fallback(
+                shape_text_in_paragraph(
                     &service.font_registry,
                     &resolved,
                     slice,
                     br.byte_range.start,
                     br.direction,
                     &features,
+                    &ScriptContext::new(text, None),
+                    br.byte_range.start,
                 )
             })
             .collect();
@@ -1533,13 +1536,15 @@ impl DocumentFlow {
             .into_iter()
             .filter_map(|br| {
                 let slice = text.get(br.byte_range.clone())?;
-                shape_text_with_fallback(
+                shape_text_in_paragraph(
                     &service.font_registry,
                     &resolved,
                     slice,
                     br.byte_range.start,
                     br.direction,
                     &features,
+                    &ScriptContext::new(text, None),
+                    br.byte_range.start,
                 )
             })
             .collect();
@@ -2051,13 +2056,15 @@ impl DocumentFlow {
                     Some(s) => s,
                     None => continue,
                 };
-                let Some(mut run) = shape_text_with_fallback(
+                let Some(mut run) = shape_text_in_paragraph(
                     &service.font_registry,
                     &resolved,
                     slice,
                     flat_start + br.byte_range.start,
                     br.direction,
                     &features,
+                    &ScriptContext::new(&flat, None),
+                    flat_start + br.byte_range.start,
                 ) else {
                     continue;
                 };

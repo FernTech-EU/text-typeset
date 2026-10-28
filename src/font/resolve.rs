@@ -1,5 +1,6 @@
 use crate::font::color::{GlyphPaint, glyph_paint};
 use crate::font::registry::FontRegistry;
+use crate::font::script_fallback::{ScriptContext, preferred_families};
 use crate::types::FontFaceId;
 
 /// A resolved font face with all parameters needed for shaping and rasterization.
@@ -154,7 +155,23 @@ pub fn find_fallback_font(
         .and_then(|entry| registry.fontdb_weight(entry.fontdb_id))
         .unwrap_or(400);
     let style = FaceStyle::of_face(registry, exclude, weight);
-    find_fallback_face(registry, ch, Presentation::Text, style, &[exclude]).map(|(face, _)| face)
+    let mut text = [0; 4];
+    let preferred = preferred_families(
+        ch,
+        &ScriptContext::new(ch.encode_utf8(&mut text), None),
+        0,
+        registry.default_language(),
+        registry.fallback_platform(),
+    );
+    find_fallback_face(
+        registry,
+        ch,
+        Presentation::Text,
+        style,
+        &[exclude],
+        preferred,
+    )
+    .map(|(face, _)| face)
 }
 
 /// The weight, style and width a fallback face should match: those of the
@@ -224,12 +241,19 @@ impl Presentation {
 /// `style` (see [`FontRegistry::family_face_matching`]), when that face has
 /// the glyph too and draws it as well: the first face found is whichever
 /// file the system lists first, Bold as readily as Regular.
+///
+/// Before all of that, for text, the families of `preferred` are asked in
+/// turn, each for its face matching `style`, and the first that draws the
+/// glyph plain is taken: the faces the system ships for the character's
+/// script and language (see [`crate::font::script_fallback`]), which the
+/// first face to cover it often is not.
 pub(crate) fn find_fallback_face(
     registry: &FontRegistry,
     ch: char,
     presentation: Presentation,
     style: FaceStyle,
     exclude: &[FontFaceId],
+    preferred: &[&str],
 ) -> Option<(FontFaceId, GlyphPaint)> {
     #[derive(Clone, Copy, PartialEq)]
     enum Pass {
@@ -260,6 +284,19 @@ pub(crate) fn find_fallback_face(
             })
             .unwrap_or((face_id, paint))
     };
+
+    if presentation == Presentation::Text {
+        for family in preferred {
+            let Some(face_id) =
+                registry.family_face(family, style.weight, style.style, style.stretch)
+            else {
+                continue;
+            };
+            if !exclude.contains(&face_id) && glyph_paint_of(face_id) == Some(GlyphPaint::Plain) {
+                return Some((face_id, GlyphPaint::Plain));
+            }
+        }
+    }
 
     // The first face seen that draws the glyph, but not as wanted.
     let mut second: Option<(FontFaceId, GlyphPaint)> = None;

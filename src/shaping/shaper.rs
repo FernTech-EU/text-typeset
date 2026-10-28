@@ -5,6 +5,7 @@ use crate::font::registry::FontRegistry;
 use crate::font::resolve::{
     FaceStyle, Presentation, ResolvedFont, face_covers, find_fallback_face,
 };
+use crate::font::script_fallback::{ScriptContext, preferred_families};
 use crate::font::synthesis;
 use crate::shaping::emoji;
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
@@ -84,6 +85,33 @@ pub fn shape_text_with_fallback(
     direction: TextDirection,
     features: &[Feature],
 ) -> Option<ShapedRun> {
+    shape_text_in_paragraph(
+        registry,
+        resolved,
+        text,
+        text_offset,
+        direction,
+        features,
+        &ScriptContext::new(text, None),
+        0,
+    )
+}
+
+/// [`shape_text_with_fallback`] for text that is part of a paragraph: the
+/// paragraph and the language its block is in (`context`), and the byte
+/// where `text` starts in the paragraph (`para_pos`), decide which faces
+/// fallback prefers for Han (see [`crate::font::script_fallback`]).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn shape_text_in_paragraph(
+    registry: &FontRegistry,
+    resolved: &ResolvedFont,
+    text: &str,
+    text_offset: usize,
+    direction: TextDirection,
+    features: &[Feature],
+    context: &ScriptContext<'_>,
+    para_pos: usize,
+) -> Option<ShapedRun> {
     let mut run = shape_text_directed(registry, resolved, text, text_offset, direction, features)?;
     blank_hard_breaks(text, &mut run);
 
@@ -108,6 +136,8 @@ pub fn shape_text_with_fallback(
             &mut run,
             &needs,
             &[resolved.font_face_id],
+            context,
+            para_pos,
             0,
         );
         // A break beside a character the primary font lacks is re-shaped with
@@ -250,7 +280,10 @@ fn emoji_clusters(text: &str, glyphs: &[ShapedGlyph]) -> Vec<bool> {
 /// between two CJK fonts of different designs.
 ///
 /// Every face is chosen to match `style`, the weight, style and width of the
-/// text (see [`find_fallback_face`]).
+/// text (see [`find_fallback_face`]), and for kana, hangul and Han among the
+/// faces the system ships for their language first, which for Han is found
+/// in `context`, the paragraph `text` starts at byte `para_pos` of (see
+/// [`crate::font::script_fallback`]).
 ///
 /// A span is re-shaped with the run's own direction rather than `Auto`, so
 /// the substituted glyphs come back in the same visual order as the ones
@@ -266,8 +299,21 @@ fn apply_glyph_fallback(
     run: &mut ShapedRun,
     needs: &[FallbackNeed],
     tried: &[FontFaceId],
+    context: &ScriptContext<'_>,
+    para_pos: usize,
     depth: usize,
 ) {
+    // The faces the fallback table prefers for the character at byte `at` of
+    // `text`.
+    let preferred = |ch: char, at: usize| {
+        preferred_families(
+            ch,
+            context,
+            para_pos + at,
+            registry.default_language(),
+            registry.fallback_platform(),
+        )
+    };
     // Maximal spans of consecutive glyphs that need a face, cut where emoji
     // presentation changes. A hard break needs none and so ends a span:
     // inside one it would choose the span's font, since a span is re-shaped
@@ -317,9 +363,14 @@ fn apply_glyph_fallback(
         } else {
             Presentation::Text
         };
-        let Some((mut fallback_id, paint)) =
-            find_fallback_face(registry, first_char, presentation, style, &excluded)
-        else {
+        let Some((mut fallback_id, paint)) = find_fallback_face(
+            registry,
+            first_char,
+            presentation,
+            style,
+            &excluded,
+            preferred(first_char, byte_start),
+        ) else {
             continue; // no fallback available: leave the span as it is
         };
         // An emoji already drawn, if in monochrome, is only worth replacing
@@ -358,14 +409,23 @@ fn apply_glyph_fallback(
         excluded.push(fallback_id);
         let mut still = fallback_needs(registry, slice, &fallback_run);
         if !emoji
-            && let Some(lacking) = fallback_run
+            && let Some((at, lacking)) = fallback_run
                 .glyphs
                 .iter()
                 .zip(&still)
                 .find(|(_, n)| n.missing)
-                .and_then(|(g, _)| slice.get(g.cluster as usize..)?.chars().next())
-            && let Some((whole_id, _)) =
-                find_fallback_face(registry, lacking, Presentation::Text, style, &excluded)
+                .and_then(|(g, _)| {
+                    let at = g.cluster as usize;
+                    Some((at, slice.get(at..)?.chars().next()?))
+                })
+            && let Some((whole_id, _)) = find_fallback_face(
+                registry,
+                lacking,
+                Presentation::Text,
+                style,
+                &excluded,
+                preferred(lacking, byte_start + at),
+            )
             && face_covers(registry, whole_id, slice)
             && let Some((resolved, mut whole_run)) = reshape(whole_id)
         {
@@ -388,6 +448,8 @@ fn apply_glyph_fallback(
                 &mut fallback_run,
                 &still,
                 &excluded,
+                context,
+                para_pos + byte_start,
                 depth + 1,
             );
         }

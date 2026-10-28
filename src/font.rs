@@ -1,6 +1,7 @@
 pub(crate) mod color;
 pub mod registry;
 pub mod resolve;
+pub(crate) mod script_fallback;
 pub(crate) mod synthesis;
 pub mod writing_system;
 pub mod writing_system_index;
