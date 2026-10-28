@@ -269,6 +269,10 @@ pub(crate) fn find_fallback_face(
 
     let glyph_paint_of = |face_id: FontFaceId| {
         let entry = registry.get(face_id)?;
+        // A face the rasterizer cannot draw would put blanks where the text is.
+        if !entry.color_tables().drawable() {
+            return None;
+        }
         let glyph = swash::FontRef::from_index(entry.bytes(), entry.face_index as usize)?
             .charmap()
             .map(ch);
@@ -311,7 +315,7 @@ pub(crate) fn find_fallback_face(
                 Pass::Explicit => !entry.is_system,
                 Pass::System => entry.is_system,
             };
-            if !visits {
+            if !visits || !entry.color_tables().drawable() {
                 continue;
             }
             let Some(glyph) = swash::FontRef::from_index(entry.bytes(), entry.face_index as usize)

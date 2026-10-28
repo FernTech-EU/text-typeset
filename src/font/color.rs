@@ -18,9 +18,16 @@ pub(crate) enum GlyphPaint {
     Plain,
 }
 
-/// The colour tables of one face, read once.
+/// The colour tables of one face, read once, and whether the rasterizer can
+/// draw the face at all.
 #[derive(Debug, Default)]
 pub(crate) struct ColorTables {
+    /// Whether the face has glyph data the rasterizer draws: `glyf`, `CFF` or
+    /// `CFF2` outlines, or colour bitmaps or paints (which Apple Color Emoji,
+    /// `sbix` only, relies on). A face with none of them, such as PingFang on
+    /// macOS 27 whose outlines are in Apple's `hvgl` table, shapes and maps
+    /// characters but draws nothing.
+    drawable: bool,
     /// Glyphs with a COLRv0 layer list, sorted. Empty unless the face also
     /// has the CPAL palette swash needs to paint them.
     colr_v0: Vec<u16>,
@@ -45,11 +52,19 @@ impl ColorTables {
         if !has(b"CPAL") {
             colr_v0.clear();
         }
+        let outlines = has(b"glyf") || has(b"CFF ") || has(b"CFF2");
         Self {
+            drawable: outlines || color_bitmaps || !colr_v0.is_empty() || !colr_v1.is_empty(),
             colr_v0,
             colr_v1,
             color_bitmaps,
         }
+    }
+
+    /// Whether the rasterizer can draw any glyph of the face. Glyph fallback
+    /// never picks a face that cannot: its characters would come out blank.
+    pub(crate) fn drawable(&self) -> bool {
+        self.drawable
     }
 }
 
@@ -120,6 +135,45 @@ fn read_colr_base_glyphs(colr: &[u8]) -> (Vec<u16>, Vec<u16>) {
     (v0, v1)
 }
 
+/// `bytes`, a single-face font, without the tables named in `drop` and with
+/// the tables of `add` (empty ones will do for a test that reads only which
+/// tables exist), as a test's stand-in for a face with other glyph data.
+#[cfg(test)]
+pub(crate) fn with_tables(bytes: &[u8], drop: &[&[u8; 4]], add: &[&[u8; 4]]) -> Vec<u8> {
+    let count = u16::from_be_bytes([bytes[4], bytes[5]]) as usize;
+    let mut tables: Vec<(Vec<u8>, Vec<u8>)> = (0..count)
+        .map(|i| {
+            let record = &bytes[12 + 16 * i..28 + 16 * i];
+            let offset = u32::from_be_bytes(record[8..12].try_into().unwrap()) as usize;
+            let length = u32::from_be_bytes(record[12..16].try_into().unwrap()) as usize;
+            (
+                record[..4].to_vec(),
+                bytes[offset..offset + length].to_vec(),
+            )
+        })
+        .filter(|(tag, _)| !drop.iter().any(|t| t.as_slice() == tag.as_slice()))
+        .collect();
+    tables.extend(add.iter().map(|tag| (tag.to_vec(), vec![0; 4])));
+    // The directory is sorted by tag, which table lookup relies on.
+    tables.sort();
+    let mut out = bytes[..4].to_vec();
+    out.extend((tables.len() as u16).to_be_bytes());
+    out.extend([0; 6]);
+    let mut offset = 12 + 16 * tables.len();
+    for (tag, data) in &tables {
+        out.extend_from_slice(tag);
+        out.extend([0; 4]);
+        out.extend((offset as u32).to_be_bytes());
+        out.extend((data.len() as u32).to_be_bytes());
+        offset += data.len().next_multiple_of(4);
+    }
+    for (_, data) in &tables {
+        out.extend_from_slice(data);
+        out.resize(out.len().next_multiple_of(4), 0);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +207,19 @@ mod tests {
         assert!(ColorTables::read(CBDT, 0).color_bitmaps);
         let plain = ColorTables::read(PLAIN, 0);
         assert!(!plain.color_bitmaps && plain.colr_v0.is_empty() && plain.colr_v1.is_empty());
+    }
+
+    #[test]
+    fn a_face_is_drawable_by_its_outlines_or_its_colour_tables() {
+        assert!(ColorTables::read(PLAIN, 0).drawable());
+        assert!(ColorTables::read(COLRV1, 0).drawable());
+        assert!(ColorTables::read(CBDT, 0).drawable());
+        // Apple Color Emoji keeps its glyphs in sbix alone.
+        let no_outlines = with_tables(PLAIN, &[b"glyf", b"loca"], &[]);
+        assert!(!ColorTables::read(&no_outlines, 0).drawable());
+        let sbix_only = with_tables(PLAIN, &[b"glyf", b"loca"], &[b"sbix"]);
+        assert!(ColorTables::read(&sbix_only, 0).drawable());
+        let cff2 = with_tables(PLAIN, &[b"glyf", b"loca"], &[b"CFF2"]);
+        assert!(ColorTables::read(&cff2, 0).drawable());
     }
 }

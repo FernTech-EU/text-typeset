@@ -464,6 +464,58 @@ mod tests {
             families[0].clone()
         }
 
+        /// A registry of the Latin default face, then `families` in order as
+        /// system faces drawn from `bytes`, with the table of `platform`.
+        fn registry_of(bytes: &[(&str, Vec<u8>)], platform: Platform) -> Faces {
+            let mut registry = FontRegistry::new_without_system_fonts();
+            let latin = registry.register_font(LATIN)[0];
+            registry.set_default_font(latin, 16.0);
+            for (family, data) in bytes {
+                let face = registry.register_font_as(data, family, 400, false)[0];
+                registry.treat_as_system(face);
+            }
+            registry.set_fallback_platform(platform);
+            Faces {
+                registry,
+                jp_bold: None,
+            }
+        }
+
+        /// PingFang on macOS 27 has its outlines in `hvgl`, which the
+        /// rasterizer cannot draw: the table's first choice maps the
+        /// characters, so choosing it would draw blanks.
+        fn undrawable() -> Vec<u8> {
+            crate::font::color::with_tables(CJK, &[b"CFF "], &[b"hvgl"])
+        }
+
+        #[test]
+        fn the_table_skips_a_listed_face_that_cannot_be_drawn() {
+            let faces = registry_of(
+                &[
+                    ("PingFang SC", undrawable()),
+                    ("Hiragino Sans GB", CJK.to_vec()),
+                ],
+                Platform::MacOs,
+            );
+            assert_eq!(family(&faces, "中你好"), "Hiragino Sans GB");
+        }
+
+        #[test]
+        fn the_coverage_search_skips_a_face_that_cannot_be_drawn() {
+            let faces = registry_of(
+                &[("Blank CJK", undrawable()), ("Drawn CJK", CJK.to_vec())],
+                Platform::Unix,
+            );
+            assert_eq!(family(&faces, "中你好"), "Drawn CJK");
+        }
+
+        #[test]
+        fn with_no_drawable_face_the_text_falls_back_to_nothing() {
+            let faces = registry_of(&[("Blank CJK", undrawable())], Platform::Unix);
+            let shaped = faces_of(&faces, "中你好", "中你好", 0, None, 400);
+            assert!(shaped.is_empty());
+        }
+
         #[test]
         fn chinese_text_picks_the_sc_face_over_a_jp_face_that_covers_it() {
             assert_eq!(family(&system(), "中你好"), "Noto Sans CJK SC");
