@@ -242,11 +242,12 @@ impl Presentation {
 /// the glyph too and draws it as well: the first face found is whichever
 /// file the system lists first, Bold as readily as Regular.
 ///
-/// Before all of that, for text, the families of `preferred` are asked in
-/// turn, each for its face matching `style`, and the first that draws the
-/// glyph plain is taken: the faces the system ships for the character's
-/// script and language (see [`crate::font::script_fallback`]), which the
-/// first face to cover it often is not.
+/// For text, between the explicitly-registered faces and the system ones,
+/// the families of `preferred` are asked in turn, each for its face matching
+/// `style`, and the first that draws the glyph plain is taken: the faces the
+/// system ships for the character's script and language (see
+/// [`crate::font::script_fallback`]), which the first system face to cover
+/// it often is not. A face the host registered still wins over them.
 pub(crate) fn find_fallback_face(
     registry: &FontRegistry,
     ch: char,
@@ -285,22 +286,22 @@ pub(crate) fn find_fallback_face(
             .unwrap_or((face_id, paint))
     };
 
-    if presentation == Presentation::Text {
-        for family in preferred {
-            let Some(face_id) =
-                registry.family_face(family, style.weight, style.style, style.stretch)
-            else {
-                continue;
-            };
-            if !exclude.contains(&face_id) && glyph_paint_of(face_id) == Some(GlyphPaint::Plain) {
-                return Some((face_id, GlyphPaint::Plain));
-            }
-        }
-    }
-
     // The first face seen that draws the glyph, but not as wanted.
     let mut second: Option<(FontFaceId, GlyphPaint)> = None;
     for &pass in passes {
+        // The table comes after the faces the host registered, so an app that
+        // ships its own font for a script keeps it, and before the system's.
+        if pass == Pass::System
+            && presentation == Presentation::Text
+            && let Some(found) = preferred.iter().find_map(|family| {
+                let face_id =
+                    registry.family_face(family, style.weight, style.style, style.stretch)?;
+                (!exclude.contains(&face_id) && glyph_paint_of(face_id) == Some(GlyphPaint::Plain))
+                    .then_some((face_id, GlyphPaint::Plain))
+            })
+        {
+            return Some(found);
+        }
         for (face_id, entry) in registry.all_entries() {
             if exclude.contains(&face_id) {
                 continue;

@@ -8,7 +8,10 @@
 //! both. A native text stack asks the system (CTFontCreateForString,
 //! IDWriteFontFallback, fontconfig) which face draws a script for a language.
 //! This crate asks a table of the faces each system ships for it, and falls
-//! back to the coverage search when none of them is installed.
+//! back to the coverage search when none of them is installed. A face the
+//! host registered itself, rather than one the system scan found, still
+//! comes first when it has the glyph: an app that ships its own font for a
+//! script keeps it.
 //!
 //! The table covers the scripts whose fallback measured wrong: Japanese kana,
 //! Korean hangul, and Han, whose one code point is drawn differently for
@@ -373,8 +376,9 @@ mod tests {
             jp_bold: Option<FontFaceId>,
         }
 
-        /// The Latin default face, then `families` (name, weight) in order,
-        /// with the Linux table.
+        /// The Latin default face, registered by the host, then `families`
+        /// (name, weight) in order, standing for installed system fonts, with
+        /// the Linux table.
         fn registry_with(families: &[(&str, u16)]) -> Faces {
             let mut registry = FontRegistry::new_without_system_fonts();
             let latin = registry.register_font(LATIN)[0];
@@ -382,6 +386,7 @@ mod tests {
             let mut jp_bold = None;
             for &(family, weight) in families {
                 let face = registry.register_font_as(CJK, family, weight, false)[0];
+                registry.treat_as_system(face);
                 if family == "Noto Sans CJK JP" && weight == 700 {
                     jp_bold = Some(face);
                 }
@@ -517,6 +522,136 @@ mod tests {
             let faces = registry_with(&[("BIZ UDGothic", 400), ("Noto Serif CJK KR", 400)]);
             assert_eq!(family(&faces, "中你好"), "BIZ UDGothic");
             assert_eq!(family(&faces, "한국어"), "BIZ UDGothic");
+        }
+
+        #[test]
+        fn a_face_the_host_registered_wins_over_the_table() {
+            let mut faces = system();
+            // An app that ships its own CJK font, registered after the
+            // system's: it keeps it for every script the table covers.
+            faces
+                .registry
+                .register_font_as(CJK, "App Sans CJK", 400, false);
+            for text in ["中你好", "日本のテキスト", "한국어"] {
+                assert_eq!(family(&faces, text), "App Sans CJK", "{text:?}");
+            }
+        }
+
+        /// A block of `fragments` (text, bold), laid out; the family of every
+        /// glyph of its first line the default face does not draw.
+        fn block_families(
+            faces: &Faces,
+            fragments: &[(&str, bool)],
+            hyphenation: Option<crate::types::Hyphenation>,
+        ) -> Vec<String> {
+            use crate::layout::block::{BlockLayoutParams, FragmentParams, layout_block};
+            let mut text = String::new();
+            let mut params_fragments = Vec::new();
+            for &(piece, bold) in fragments {
+                params_fragments.push(FragmentParams {
+                    text: piece.to_string(),
+                    offset: text.len(),
+                    length: piece.len(),
+                    font_family: None,
+                    font_weight: None,
+                    font_bold: Some(bold),
+                    font_italic: None,
+                    font_point_size: None,
+                    size_scale: 1.0,
+                    underline_style: crate::types::UnderlineStyle::None,
+                    overline: false,
+                    strikeout: false,
+                    is_link: false,
+                    letter_spacing: 0.0,
+                    word_spacing: 0.0,
+                    foreground_color: None,
+                    underline_color: None,
+                    background_color: None,
+                    anchor_href: None,
+                    tooltip: None,
+                    vertical_alignment: crate::types::VerticalAlignment::Normal,
+                    image_name: None,
+                    image_width: 0.0,
+                    image_height: 0.0,
+                    footnote_marker: None,
+                    features: Vec::new(),
+                });
+                text.push_str(piece);
+            }
+            let params = BlockLayoutParams {
+                block_id: 1,
+                position: 0,
+                text,
+                fragments: params_fragments,
+                alignment: crate::layout::paragraph::Alignment::Left,
+                top_margin: 0.0,
+                bottom_margin: 0.0,
+                left_margin: 0.0,
+                right_margin: 0.0,
+                text_indent: 0.0,
+                list_marker: String::new(),
+                list_indent: 0.0,
+                tab_positions: Vec::new(),
+                base_direction: TextDirection::Auto,
+                line_height_multiplier: None,
+                non_breakable_lines: false,
+                hyphenation,
+                checkbox: None,
+                background_color: None,
+            };
+            let block = layout_block(&faces.registry, &params, 800.0, 1.0, 1.0);
+            let default = faces.registry.default_font();
+            let ids: Vec<FontFaceId> = block.lines[0]
+                .runs
+                .iter()
+                .flat_map(|run| run.shaped_run.glyphs.iter().map(|g| g.font_face_id))
+                .filter(|&id| Some(id) != default)
+                .collect();
+            families_of(faces, &ids)
+        }
+
+        #[test]
+        fn han_in_a_run_of_its_own_takes_the_kana_of_its_block() {
+            // 日本語 bold and のテキスト regular: two runs, shaped apart.
+            let faces = system();
+            let found = block_families(&faces, &[("日本語", true), ("のテキスト", false)], None);
+            assert_eq!(found.len(), 8, "{found:?}");
+            assert!(found.iter().all(|f| f == "Noto Sans CJK JP"), "{found:?}");
+        }
+
+        #[test]
+        fn the_blocks_language_wins_over_its_kana() {
+            let faces = system();
+            let found = block_families(
+                &faces,
+                &[("中のテキスト", false)],
+                Some(crate::types::Hyphenation::new(*b"zh")),
+            );
+            assert_eq!(found[0], "Noto Sans CJK SC", "{found:?}");
+        }
+
+        #[test]
+        fn a_label_follows_the_services_default_language() {
+            use crate::{DocumentFlow, TextFontService, TextFormat};
+            let mut service = TextFontService::new_without_system_fonts();
+            service.font_registry = system().registry;
+            let label = |service: &mut TextFontService| {
+                let result = DocumentFlow::new().layout_single_line(
+                    service,
+                    "中你好",
+                    &TextFormat::default(),
+                    None,
+                    1.0,
+                );
+                let ids: Vec<FontFaceId> =
+                    result.glyph_keys.iter().map(|k| k.font_face_id).collect();
+                ids.iter()
+                    .map(|&id| service.font_registry.font_family_name(id).unwrap())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(label(&mut service), vec!["Noto Sans CJK SC"; 3]);
+            service.set_default_language(Some("ja-JP"));
+            assert_eq!(label(&mut service), vec!["Noto Sans CJK JP"; 3]);
         }
     }
 }

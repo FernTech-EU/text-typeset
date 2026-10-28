@@ -370,6 +370,15 @@ impl FontRegistry {
         self.fallback_platform = platform;
     }
 
+    /// Count a registered face as one the system scan found, as a test's
+    /// stand-in for an installed font.
+    #[cfg(test)]
+    pub(crate) fn treat_as_system(&mut self, face_id: FontFaceId) {
+        if let Some(Some(entry)) = self.fonts.get_mut(face_id.0 as usize) {
+            entry.is_system = true;
+        }
+    }
+
     pub fn set_generic_family(&mut self, generic: &str, family: &str) {
         self.generic_families
             .insert(generic.to_string(), family.to_string());
