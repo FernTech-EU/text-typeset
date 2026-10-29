@@ -6,3 +6,5 @@ files.extend-exclude = [
 # Acronyms
 als = "als"
 lits = "lits"
+# OpenType index-to-location table tag.
+loca = "loca"
