@@ -33,7 +33,7 @@ hyphenation-western-european = [
 hyphenation-all-languages = ["hypher/default"]
 
 [dependencies]
-harfrust = "0.14.0"
+harfrust = "0.15.0"
 swash = "0.2.10"
 # COLRv1 paint traversal (src/atlas/colr.rs). The version swash already
 # builds against, so it compiles nothing new.
@@ -47,7 +47,7 @@ fontdb = "0.24.0"
 # transitively by fontdb, so it adds no newly-compiled crate.
 ttf-parser = "0.25"
 etagere = "0.3"
-icu_segmenter = "2.3.0"
+icu_segmenter = "2.4.0"
 unicode-bidi = "0.3"
 thiserror = "2.0"
 text-document = { path = "../text-document/crates/public_api", version = "1.15.0", optional = true }
