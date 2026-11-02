@@ -338,19 +338,51 @@ pub struct TableVisualInfo {
 
 /// Visual position and size of a laid-out block.
 ///
-/// Returned by [`crate::DocumentFlow::block_visual_info`].
+/// Returned by [`crate::DocumentFlow::block_visual_info`] and, with the
+/// block's lines, by [`crate::DocumentFlow::block_geometry`].
+///
+/// Three x positions matter, and they are not the same:
+///
+/// - [`x`](Self::x), the left edge of the column the block sits in;
+/// - [`content_x`](Self::content_x), where the block's text starts, after its
+///   left margin and any list or paragraph indent;
+/// - [`marker_x`](Self::marker_x), where its list or checkbox marker is drawn,
+///   in the indent area between the two.
+///
+/// Line rectangles returned by [`crate::DocumentFlow::block_geometry`] and
+/// [`crate::DocumentFlow::block_line_geometry`] are relative to
+/// [`content_x`](Self::content_x), not to [`x`](Self::x).
 #[non_exhaustive]
 pub struct BlockVisualInfo {
     /// Block ID (matches `BlockSnapshot::block_id`).
     pub block_id: usize,
-    /// X position of the left edge of the block's content column, relative to
-    /// the document start, in pixels.
+    /// X position of the left edge of the block's column, relative to the
+    /// document start, in pixels. It does **not** include the block's own left
+    /// margin or indent: a rectangle around the block's text starts at
+    /// [`content_x`](Self::content_x), and one that also covers the marker
+    /// starts here.
     ///
     /// Zero for a block in the document's own column. A block inside a table
-    /// cell or a frame has its own left origin — column 1 of a table does not
-    /// start at the document's left edge — so anything placing a rectangle
-    /// around the block's text has to start here rather than at zero.
+    /// cell or a frame has its own left origin: column 1 of a table does not
+    /// start at the document's left edge.
     pub x: f32,
+    /// X position where the block's text starts, relative to the document
+    /// start, in pixels: [`x`](Self::x) plus the block's left margin and its
+    /// list or paragraph indent. This is the origin of the `x` of every line
+    /// rectangle and segment the line geometry reports for the block, and the
+    /// origin the renderer paints glyphs from.
+    ///
+    /// Equal to [`x`](Self::x) for a block with no margin and no indent.
+    pub content_x: f32,
+    /// X position of the block's list or checkbox marker box, relative to the
+    /// document start, in pixels, or `None` when the block has no marker.
+    /// The marker is drawn at the left of the indent area whatever the block's
+    /// reading direction.
+    pub marker_x: Option<f32>,
+    /// Advance width of the marker, in pixels; `0.0` when the block has no
+    /// marker. The marker box is `marker_x` to `marker_x + marker_width`,
+    /// on the block's first line.
+    pub marker_width: f32,
     /// Y position of the block's top edge relative to the document start, in pixels.
     pub y: f32,
     /// Total height of the block including margins, in pixels.
@@ -718,6 +750,10 @@ pub struct LineGeometry {
     pub char_range: std::ops::Range<usize>,
     /// Bounding box `[x, y, width, height]` in layout-local coordinates.
     /// `y` is the top of the line box, `height` its full line height.
+    ///
+    /// For a line of a laid-out document block, `x` is measured from
+    /// [`BlockVisualInfo::content_x`], the start of the block's text, and `y`
+    /// from the block's top edge.
     pub rect: [f32; 4],
     /// Baseline y in layout-local coordinates.
     pub baseline: f32,

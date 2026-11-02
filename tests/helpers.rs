@@ -537,6 +537,13 @@ impl Typesetter {
     pub fn block_line_geometry(&self, block_id: usize, text: &str) -> Vec<LineGeometry> {
         self.flow.block_line_geometry(block_id, text)
     }
+    pub fn block_geometry(
+        &self,
+        block_id: usize,
+        text: &str,
+    ) -> Option<(BlockVisualInfo, Vec<LineGeometry>)> {
+        self.flow.block_geometry(block_id, text)
+    }
 
     // ── Hit testing & geometry ──
     pub fn hit_test(&self, x: f32, y: f32) -> Option<HitTestResult> {

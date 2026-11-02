@@ -234,6 +234,29 @@ pub struct DocumentFlow {
     has_layout: bool,
 }
 
+/// The visual geometry of one resolved block.
+///
+/// The one place a [`BlockVisualInfo`] is built, so `block_visual_info` and
+/// `block_geometry` cannot answer differently. `BlockLayout::left_margin`
+/// already holds the effective margin (the block's left margin plus its list
+/// or paragraph indent), so `content_x` adds nothing else to it. The marker is
+/// positioned relative to the column edge, as the renderer paints it.
+fn block_visual_info_of(
+    block_id: usize,
+    resolved: &crate::layout::flow::ResolvedBlock<'_>,
+) -> BlockVisualInfo {
+    let marker = resolved.block.list_marker.as_ref();
+    BlockVisualInfo {
+        block_id,
+        x: resolved.origin_x,
+        content_x: resolved.origin_x + resolved.block.left_margin,
+        marker_x: marker.map(|m| resolved.origin_x + m.x),
+        marker_width: marker.map_or(0.0, |m| m.run.advance_width),
+        y: resolved.origin_y + resolved.block.y,
+        height: resolved.block.height,
+    }
+}
+
 impl DocumentFlow {
     /// Create an empty flow with no content.
     ///
@@ -2234,7 +2257,9 @@ impl DocumentFlow {
     /// `text` is the block's own text — the layout stores char offsets,
     /// not the string they index, so the caller supplies it and every
     /// byte range in the result indexes it. Line boxes are relative to
-    /// the block's top edge.
+    /// the block's top edge and, horizontally, to
+    /// [`BlockVisualInfo::content_x`] (the start of the block's text, after
+    /// its margin and indent), not to the column edge.
     pub fn block_line_geometry(&self, block_id: usize, text: &str) -> Vec<LineGeometry> {
         let Some(resolved) = self.flow_layout.resolve_block(block_id) else {
             return Vec::new();
@@ -2415,12 +2440,7 @@ impl DocumentFlow {
 
     pub fn block_visual_info(&self, block_id: usize) -> Option<BlockVisualInfo> {
         let resolved = self.flow_layout.resolve_block(block_id)?;
-        Some(BlockVisualInfo {
-            block_id,
-            x: resolved.origin_x,
-            y: resolved.origin_y + resolved.block.y,
-            height: resolved.block.height,
-        })
+        Some(block_visual_info_of(block_id, &resolved))
     }
 
     /// The reading direction of the text *at* `position`.
@@ -2643,18 +2663,19 @@ impl DocumentFlow {
     /// search is a walk rather than a hash lookup. A caller that wants both —
     /// the accessibility walk wants both for every block it emits — should ask
     /// once.
+    ///
+    /// The line rectangles, `caret_x` and segments are relative to the
+    /// returned [`BlockVisualInfo::content_x`] horizontally and to the
+    /// block's top edge vertically. They are not relative to
+    /// [`BlockVisualInfo::x`]: a list item or an indented paragraph starts its
+    /// text `content_x - x` to the right of it.
     pub fn block_geometry(
         &self,
         block_id: usize,
         text: &str,
     ) -> Option<(BlockVisualInfo, Vec<LineGeometry>)> {
         let resolved = self.flow_layout.resolve_block(block_id)?;
-        let info = BlockVisualInfo {
-            block_id,
-            x: resolved.origin_x,
-            y: resolved.origin_y + resolved.block.y,
-            height: resolved.block.height,
-        };
+        let info = block_visual_info_of(block_id, &resolved);
         let lines = crate::layout::geometry::stacked_lines_geometry(
             &resolved.block.lines,
             text,
