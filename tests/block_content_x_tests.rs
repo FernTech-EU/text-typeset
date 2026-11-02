@@ -311,3 +311,79 @@ fn an_rtl_list_item_ends_its_text_at_the_line_rect_and_keeps_the_marker_at_the_l
     let (mleft, _) = glyph_extent(&mut ts, &info, line, (-1000.0, info.content_x - 0.5));
     assert!((mleft - marker_x).abs() <= BEARING, "{mleft} vs {marker_x}");
 }
+
+#[test]
+fn a_marker_wider_than_the_indent_starts_at_the_left_margin_and_overlaps_the_text() {
+    let mut ts = typesetter();
+    let mut b = make_block(1, TEXT);
+    b.left_margin = 10.0;
+    b.list_marker = "\u{2022}".into();
+    b.list_indent = 0.0;
+    ts.layout_blocks(vec![b]);
+    let (info, _) = ts.block_geometry(1, TEXT).unwrap();
+    assert_eq!(info.content_x, info.x + 10.0);
+    assert_eq!(
+        info.marker_x,
+        Some(info.x + 10.0),
+        "the marker never starts left of the left margin"
+    );
+    assert!(info.marker_width > 0.0);
+    assert!(
+        info.marker_x.unwrap() + info.marker_width > info.content_x,
+        "with no indent the marker box runs into the text"
+    );
+}
+
+/// The bridge turns a paragraph indent into `list_indent` and a list item's
+/// level into its own indent; hand-built params do not exercise that.
+#[test]
+fn a_real_document_reports_content_x_for_an_indented_paragraph_and_a_nested_item() {
+    use text_document::{BlockFormat, TextDocument};
+
+    let doc = TextDocument::new();
+    doc.set_markdown("Plain\n\n- one\n  - two\n")
+        .unwrap()
+        .wait()
+        .unwrap();
+    let cursor = doc.cursor();
+    cursor
+        .set_block_format(&BlockFormat {
+            indent: Some(2),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let mut ts = typesetter();
+    ts.layout_full(&doc.snapshot_flow());
+    ts.render();
+
+    let mut by_text = std::collections::HashMap::new();
+    let mut pos = 0;
+    for _ in 0..3 {
+        let block = doc.block_at_position(pos).expect("block");
+        by_text.insert(block.text(), block.id());
+        pos = block.position() + block.text().chars().count() + 1;
+    }
+    let info_of = |ts: &Typesetter, t: &str| ts.block_geometry(by_text[t], t).unwrap().0;
+
+    let plain = info_of(&ts, "Plain");
+    let one = info_of(&ts, "one");
+    let two = info_of(&ts, "two");
+    assert_eq!(
+        plain.content_x - plain.x,
+        48.0,
+        "indent 2 is two levels of 24"
+    );
+    assert_eq!(plain.marker_x, None);
+    assert!(one.marker_x.is_some() && two.marker_x.is_some());
+    assert!(one.content_x - one.x > 0.0);
+    assert!(
+        two.content_x > one.content_x,
+        "the nested item's text starts right of its parent's: {} vs {}",
+        two.content_x,
+        one.content_x
+    );
+    for t in ["Plain", "one", "two"] {
+        assert_text_starts_at_content_x(&mut ts, by_text[t], t);
+    }
+}

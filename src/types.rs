@@ -347,7 +347,7 @@ pub struct TableVisualInfo {
 /// - [`content_x`](Self::content_x), where the block's text starts, after its
 ///   left margin and any list or paragraph indent;
 /// - [`marker_x`](Self::marker_x), where its list or checkbox marker is drawn,
-///   in the indent area between the two.
+///   in the indent area before the text.
 ///
 /// Line rectangles returned by [`crate::DocumentFlow::block_geometry`] and
 /// [`crate::DocumentFlow::block_line_geometry`] are relative to
@@ -376,8 +376,12 @@ pub struct BlockVisualInfo {
     pub content_x: f32,
     /// X position of the block's list or checkbox marker box, relative to the
     /// document start, in pixels, or `None` when the block has no marker.
-    /// The marker is drawn at the left of the indent area whatever the block's
-    /// reading direction.
+    ///
+    /// The marker is drawn in the indent area just before the text,
+    /// right-aligned with a small gap, and never left of the block's left
+    /// margin. When the indent is narrower than the marker, the marker starts
+    /// at the left margin (`x` plus the margin) and its box overlaps the text.
+    /// In a right-to-left block it is currently still drawn at the left.
     pub marker_x: Option<f32>,
     /// Advance width of the marker, in pixels; `0.0` when the block has no
     /// marker. The marker box is `marker_x` to `marker_x + marker_width`,
@@ -721,7 +725,8 @@ pub struct LineSegment {
     pub char_range: std::ops::Range<usize>,
     /// Reading direction of every character in this segment.
     pub direction: GeometryDirection,
-    /// Bounding box `[x, y, width, height]` in layout-local coordinates.
+    /// Bounding box `[x, y, width, height]` in layout-local coordinates, with
+    /// the same origin as [`LineGeometry::rect`].
     pub rect: [f32; 4],
     /// One entry per character of `char_range`, in **logical** order.
     ///
@@ -759,7 +764,8 @@ pub struct LineGeometry {
     pub baseline: f32,
     /// Where a caret sits on a line with no glyphs of its own — the x the
     /// first typed character would take, honouring indent, alignment and
-    /// base direction.
+    /// base direction. Like `rect`, it is measured from
+    /// [`BlockVisualInfo::content_x`] for a laid-out document block.
     pub caret_x: f32,
     /// Direction-uniform stretches in logical order.
     ///

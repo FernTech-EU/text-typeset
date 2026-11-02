@@ -2256,8 +2256,8 @@ impl DocumentFlow {
     ///
     /// `text` is the block's own text — the layout stores char offsets,
     /// not the string they index, so the caller supplies it and every
-    /// byte range in the result indexes it. Line boxes are relative to
-    /// the block's top edge and, horizontally, to
+    /// byte range in the result indexes it. Line boxes, `caret_x` and
+    /// segments are relative to the block's top edge and, horizontally, to
     /// [`BlockVisualInfo::content_x`] (the start of the block's text, after
     /// its margin and indent), not to the column edge.
     pub fn block_line_geometry(&self, block_id: usize, text: &str) -> Vec<LineGeometry> {
@@ -2425,8 +2425,6 @@ impl DocumentFlow {
 
     // ── Scrolling helpers ──────────────────────────────────────
 
-    /// Visual position and height of a laid-out block. Returns
-    /// `None` if `block_id` is not in the current layout.
     /// The document-character offset the layout believes `block_id` starts at.
     ///
     /// The layout keeps its own copy of each block's position and shifts it on
@@ -2438,6 +2436,11 @@ impl DocumentFlow {
         crate::layout::flow::find_block_ref(&self.flow_layout, block_id).map(|b| b.position)
     }
 
+    /// Visual position and height of a laid-out block. Returns
+    /// `None` if `block_id` is not in the current layout.
+    ///
+    /// See [`BlockVisualInfo`] for the three x positions (`x`, `content_x`,
+    /// `marker_x`).
     pub fn block_visual_info(&self, block_id: usize) -> Option<BlockVisualInfo> {
         let resolved = self.flow_layout.resolve_block(block_id)?;
         Some(block_visual_info_of(block_id, &resolved))
