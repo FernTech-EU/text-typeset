@@ -705,6 +705,8 @@ fn hit_test_link_region_detected() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts.layout_blocks(vec![block]);
 

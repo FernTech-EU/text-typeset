@@ -228,6 +228,16 @@ pub fn convert_block_with(block: &BlockSnapshot, opts: &BridgeOptions) -> BlockL
         fragments,
         alignment,
         base_direction: convert_direction(block.block_format.direction.as_ref()),
+        // Unset: the flow's default, else left to right (see
+        // `BlockLayoutParams::neutral_direction`).
+        neutral_direction: TextDirection::Auto,
+        language: block
+            .block_format
+            .language
+            .as_deref()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned),
         top_margin: block.block_format.top_margin.unwrap_or(0) as f32,
         bottom_margin: block.block_format.bottom_margin.unwrap_or(0) as f32,
         left_margin: block.block_format.left_margin.unwrap_or(0) as f32,

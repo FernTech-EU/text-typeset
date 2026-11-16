@@ -37,7 +37,8 @@ Put the service behind whatever smart pointer your host framework uses (an `Rc<R
 - **Glyph atlas** backed by [etagere](https://crates.io/crates/etagere) shelf packing with auto-grow and LRU eviction — shared across every widget through the `TextFontService`
 - **Paragraph layout** with line breaking ([icu_segmenter](https://crates.io/crates/icu_segmenter), UAX #14), four alignment modes (left, right, center, justify), and first-line indent
 - **Hyphenation** via [hypher](https://crates.io/crates/hypher), Western European languages by default (`hyphenation-all-languages` for every language hypher ships), plus soft-hyphen breaking
-- **BiDi text** analysis via [unicode-bidi](https://crates.io/crates/unicode-bidi) with per-run directional shaping
+- **BiDi text** analysis via [unicode-bidi](https://crates.io/crates/unicode-bidi) with per-run directional shaping; a flow can give blocks with no stored direction a default one, and an empty or all-neutral paragraph the direction of its language (`set_default_direction`, `set_neutral_direction`)
+- **Content language**: a block's language, or a flow's default (`set_default_language`), reaches the shaper, which uses a font's language-specific forms (OpenType `locl`), and decides how Han is drawn
 - **Tables** with column width distribution, cell layout, borders, and cell backgrounds
 - **Lists** with marker rendering (bullet, decimal, alpha, roman) at configurable indent levels
 - **Frames** with inline, float-left, float-right, and absolute positioning

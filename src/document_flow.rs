@@ -202,6 +202,11 @@ pub struct DocumentFlow {
     /// `layout_full`. Enable on prose surfaces only. `false` by default.
     /// See [`set_hyphenate_justified`](Self::set_hyphenate_justified).
     hyphenate_justified: bool,
+    /// The language and directions filled into every block that does not
+    /// say. See [`set_default_language`](Self::set_default_language),
+    /// [`set_default_direction`](Self::set_default_direction) and
+    /// [`set_neutral_direction`](Self::set_neutral_direction).
+    block_defaults: crate::layout::defaults::BlockDefaults,
     cursors: Vec<CursorDisplay>,
     zoom: f32,
     rendered_zoom: f32,
@@ -282,6 +287,7 @@ impl DocumentFlow {
             link_foreground: None,
             echo_char: None,
             hyphenate_justified: false,
+            block_defaults: Default::default(),
             cursors: Vec::new(),
             zoom: 1.0,
             rendered_zoom: f32::NAN,
@@ -530,7 +536,18 @@ impl DocumentFlow {
             echo_char: self.echo_char,
             hyphenate_justified: self.hyphenate_justified,
         };
-        let converted = convert_flow_with(flow, &opts);
+        let mut converted = convert_flow_with(flow, &opts);
+        if self.block_defaults.is_set() {
+            for (_, block) in &mut converted.blocks {
+                self.block_defaults.apply_block(block);
+            }
+            for (_, table) in &mut converted.tables {
+                self.block_defaults.apply_table(table);
+            }
+            for (_, frame) in &mut converted.frames {
+                self.block_defaults.apply_frame(frame);
+            }
+        }
 
         // Merge all elements by flow index and process in order.
         let mut all_items: Vec<(usize, FlowItemKind)> = Vec::new();
@@ -586,8 +603,13 @@ impl DocumentFlow {
     pub fn layout_blocks(
         &mut self,
         service: &TextFontService,
-        block_params: Vec<BlockLayoutParams>,
+        mut block_params: Vec<BlockLayoutParams>,
     ) {
+        if self.block_defaults.is_set() {
+            for block in &mut block_params {
+                self.block_defaults.apply_block(block);
+            }
+        }
         self.flow_layout.scale_factor = service.scale_factor;
         self.flow_layout.font_scale = self.font_scale;
         self.flow_layout
@@ -636,10 +658,11 @@ impl DocumentFlow {
         if self.has_layout && self.layout_scale_generation != service.scale_generation() {
             return Err(RelayoutError::ScaleDirty);
         }
+        let params = self.block_defaults.block(params);
         self.flow_layout.scale_factor = service.scale_factor;
         self.flow_layout.font_scale = self.font_scale;
         self.flow_layout
-            .append_block(&service.font_registry, params, self.layout_width());
+            .append_block(&service.font_registry, &params, self.layout_width());
         self.note_layout_done(service);
         Ok(())
     }
@@ -720,6 +743,16 @@ impl DocumentFlow {
         total_rows: usize,
         row_height: f32,
     ) {
+        let filled: Vec<(usize, BlockLayoutParams)>;
+        let window = if self.block_defaults.is_set() {
+            filled = window
+                .iter()
+                .map(|(row, params)| (*row, self.block_defaults.block(params).into_owned()))
+                .collect();
+            &filled[..]
+        } else {
+            window
+        };
         self.flow_layout.scale_factor = service.scale_factor;
         self.flow_layout.font_scale = self.font_scale;
         self.flow_layout.layout_window(
@@ -774,25 +807,29 @@ impl DocumentFlow {
             echo_char: self.echo_char,
             hyphenate_justified: self.hyphenate_justified,
         };
-        crate::bridge::convert_block_with(block, &opts)
+        let mut params = crate::bridge::convert_block_with(block, &opts);
+        self.block_defaults.apply_block(&mut params);
+        params
     }
 
     /// Append a frame to the current flow. The frame's position
     /// (inline, float, absolute) is carried in `params`.
     pub fn add_frame(&mut self, service: &TextFontService, params: &FrameLayoutParams) {
+        let params = self.block_defaults.frame(params);
         self.flow_layout.scale_factor = service.scale_factor;
         self.flow_layout.font_scale = self.font_scale;
         self.flow_layout
-            .add_frame(&service.font_registry, params, self.layout_width());
+            .add_frame(&service.font_registry, &params, self.layout_width());
         self.note_layout_done(service);
     }
 
     /// Append a table to the current flow.
     pub fn add_table(&mut self, service: &TextFontService, params: &TableLayoutParams) {
+        let params = self.block_defaults.table(params);
         self.flow_layout.scale_factor = service.scale_factor;
         self.flow_layout.font_scale = self.font_scale;
         self.flow_layout
-            .add_table(&service.font_registry, params, self.layout_width());
+            .add_table(&service.font_registry, &params, self.layout_width());
         self.note_layout_done(service);
     }
 
@@ -837,11 +874,12 @@ impl DocumentFlow {
         if self.layout_scale_generation != service.scale_generation() {
             return Err(RelayoutError::ScaleDirty);
         }
+        let params = self.block_defaults.block(params);
         self.flow_layout.scale_factor = service.scale_factor;
         self.flow_layout.font_scale = self.font_scale;
         if !self
             .flow_layout
-            .relayout_block(&service.font_registry, params, self.layout_width())
+            .relayout_block(&service.font_registry, &params, self.layout_width())
         {
             return Err(RelayoutError::UnknownBlock(params.block_id));
         }
@@ -1321,7 +1359,7 @@ impl DocumentFlow {
                     br.byte_range.start,
                     br.direction,
                     &features,
-                    &ScriptContext::new(text, None),
+                    &ScriptContext::in_language(text, self.block_defaults.language.as_deref()),
                     br.byte_range.start,
                 )
             })
@@ -1566,7 +1604,7 @@ impl DocumentFlow {
                     br.byte_range.start,
                     br.direction,
                     &features,
-                    &ScriptContext::new(text, None),
+                    &ScriptContext::in_language(text, self.block_defaults.language.as_deref()),
                     br.byte_range.start,
                 )
             })
@@ -2086,7 +2124,7 @@ impl DocumentFlow {
                     flat_start + br.byte_range.start,
                     br.direction,
                     &features,
-                    &ScriptContext::new(&flat, None),
+                    &ScriptContext::in_language(&flat, self.block_defaults.language.as_deref()),
                     flat_start + br.byte_range.start,
                 ) else {
                     continue;
@@ -2369,6 +2407,67 @@ impl DocumentFlow {
     /// Whether justified blocks are auto-hyphenated.
     pub fn hyphenate_justified(&self) -> bool {
         self.hyphenate_justified
+    }
+
+    /// The language of every block that does not state one, and of the
+    /// labels this flow lays out ([`layout_single_line`](Self::layout_single_line),
+    /// [`layout_paragraph`](Self::layout_paragraph) and their markup and
+    /// geometry forms): a BCP 47 tag (`"ja"`, `"sr-Cyrl"`). `None` (the
+    /// default) states none.
+    ///
+    /// The language decides how Han characters are drawn and is passed to
+    /// the shaper, which uses a font's language-specific forms with it
+    /// (OpenType `locl`). A block's own language, from the document, wins;
+    /// this default is how a host gives a whole field or editor a language
+    /// without writing it into the document, and how it lays out a label in
+    /// a language.
+    ///
+    /// Applies to everything this flow lays out from then on, through every
+    /// `layout_*`, `add_*` and `relayout_block` call; blocks already laid out
+    /// keep their shaping until they are laid out again.
+    pub fn set_default_language(&mut self, language: Option<&str>) {
+        self.block_defaults.language = language
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned);
+    }
+
+    /// The language given to blocks that state none.
+    pub fn default_language(&self) -> Option<&str> {
+        self.block_defaults.language.as_deref()
+    }
+
+    /// The base direction of every block that does not store one. `Auto`
+    /// (the default) lets the text decide (UAX #9: the first strongly
+    /// directional character). A block's own stored direction wins.
+    ///
+    /// Applies from the next layout of each block, as
+    /// [`set_default_language`](Self::set_default_language) does.
+    pub fn set_default_direction(&mut self, direction: TextDirection) {
+        self.block_defaults.direction = direction;
+    }
+
+    /// The base direction given to blocks that store none.
+    pub fn default_direction(&self) -> TextDirection {
+        self.block_defaults.direction
+    }
+
+    /// The direction an `Auto` block takes when its text has no strongly
+    /// directional character: an empty block, or one of digits and
+    /// punctuation. `Auto` (the default) and `LeftToRight` give the UAX #9
+    /// answer, left to right; a field for a right-to-left language sets
+    /// `RightToLeft` so that, empty, its caret starts on the right.
+    ///
+    /// Applies from the next layout of each block, as
+    /// [`set_default_language`](Self::set_default_language) does.
+    pub fn set_neutral_direction(&mut self, direction: TextDirection) {
+        self.block_defaults.neutral_direction = direction;
+    }
+
+    /// The direction given to `Auto` blocks with no strongly directional
+    /// character.
+    pub fn neutral_direction(&self) -> TextDirection {
+        self.block_defaults.neutral_direction
     }
 
     /// Set the foreground used for monospaced runs (inline `code`,
@@ -3079,6 +3178,8 @@ mod tests {
             hyphenation: None,
             checkbox: None,
             background_color: None,
+            neutral_direction: crate::shaping::shaper::TextDirection::Auto,
+            language: None,
         }
     }
 

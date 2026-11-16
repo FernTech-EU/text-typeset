@@ -112,7 +112,15 @@ pub(crate) fn shape_text_in_paragraph(
     context: &ScriptContext<'_>,
     para_pos: usize,
 ) -> Option<ShapedRun> {
-    let mut run = shape_text_directed(registry, resolved, text, text_offset, direction, features)?;
+    let mut run = shape_text_directed_in(
+        registry,
+        resolved,
+        text,
+        text_offset,
+        direction,
+        features,
+        context.language_tag(),
+    )?;
     blank_hard_breaks(text, &mut run);
 
     // Look for another face for every glyph the primary font lacks (a hard
@@ -391,13 +399,14 @@ fn apply_glyph_fallback(
                 italic: primary.italic,
             };
             // Clusters come back local to `slice`.
-            let run = shape_text_directed(
+            let run = shape_text_directed_in(
                 registry,
                 &resolved,
                 slice,
                 text_offset + byte_start,
                 run.direction,
                 features,
+                context.language_tag(),
             )?;
             (!run.glyphs.is_empty()).then_some((resolved, run))
         };
@@ -514,6 +523,39 @@ pub fn shape_text_directed(
     direction: TextDirection,
     features: &[Feature],
 ) -> Option<ShapedRun> {
+    shape_text_directed_in(
+        registry,
+        resolved,
+        text,
+        text_offset,
+        direction,
+        features,
+        None,
+    )
+}
+
+/// The language the shaper is told `tag` (a BCP 47 tag) names, `None` for
+/// no tag. The shaper picks a font's language-specific forms with it
+/// (OpenType `locl`: Serbian and Bulgarian Cyrillic, Romanian comma-below
+/// letters, the Persian and Urdu forms of Arabic letters and digits, a
+/// pan-CJK face's regional glyphs).
+fn shaping_language(tag: Option<&str>) -> Option<harfrust::Language> {
+    tag.map(str::trim)
+        .filter(|t| !t.is_empty())
+        .and_then(|t| t.parse::<harfrust::Language>().ok())
+}
+
+/// [`shape_text_directed`] for text in `language`, a BCP 47 tag.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn shape_text_directed_in(
+    registry: &FontRegistry,
+    resolved: &ResolvedFont,
+    text: &str,
+    text_offset: usize,
+    direction: TextDirection,
+    features: &[Feature],
+    language: Option<&str>,
+) -> Option<ShapedRun> {
     let entry = registry.get(resolved.font_face_id)?;
     let font = entry.shaping_font()?;
 
@@ -535,6 +577,8 @@ pub fn shape_text_directed(
         TextDirection::RightToLeft => buffer.set_direction(Direction::RightToLeft),
         TextDirection::Auto => {}
     }
+    // Set before the guess below, which leaves a language it finds set.
+    buffer.set_language(shaping_language(language));
     // Always guess, including after an explicit set_direction. The guess
     // only fills in what is still unset — it assigns `script` when it is
     // `None` and `direction` when it is `Invalid` — so the caller's
@@ -831,6 +875,51 @@ fn base_para_level(base: TextDirection) -> Option<unicode_bidi::Level> {
         TextDirection::LeftToRight => Some(unicode_bidi::Level::ltr()),
         TextDirection::RightToLeft => Some(unicode_bidi::Level::rtl()),
     }
+}
+
+/// The base direction a paragraph of `text` takes.
+///
+/// An explicit `base` is the answer. `Auto` applies UAX #9 rules P2/P3: the
+/// first strongly directional character outside an isolate decides. When
+/// the text has none (it is empty, or only digits, spaces and punctuation),
+/// `neutral` decides, which is how a host gives an empty field the
+/// direction of the language it is for; the algorithm's own answer there is
+/// left to right, which is what `Auto` and `LeftToRight` give.
+///
+/// Never returns `Auto`.
+pub fn resolve_paragraph_direction(
+    text: &str,
+    base: TextDirection,
+    neutral: TextDirection,
+) -> TextDirection {
+    match base {
+        TextDirection::LeftToRight | TextDirection::RightToLeft => base,
+        TextDirection::Auto => match unicode_bidi::get_base_direction(text) {
+            unicode_bidi::Direction::Ltr => TextDirection::LeftToRight,
+            unicode_bidi::Direction::Rtl => TextDirection::RightToLeft,
+            unicode_bidi::Direction::Mixed => match neutral {
+                TextDirection::RightToLeft => TextDirection::RightToLeft,
+                _ => TextDirection::LeftToRight,
+            },
+        },
+    }
+}
+
+/// [`analyze_paragraph`] for a paragraph whose `Auto` direction falls back
+/// on `neutral` when the text has no strongly directional character (see
+/// [`resolve_paragraph_direction`]).
+pub fn analyze_paragraph_with_neutral(
+    text: &str,
+    base: TextDirection,
+    neutral: TextDirection,
+) -> BidiParagraph {
+    let base = match (base, neutral) {
+        (TextDirection::Auto, TextDirection::RightToLeft) => {
+            resolve_paragraph_direction(text, base, neutral)
+        }
+        _ => base,
+    };
+    analyze_paragraph(text, base)
 }
 
 /// Resolve `text`'s bidi structure under an explicit or auto base direction.
@@ -1134,5 +1223,51 @@ mod bidi_tests {
         let para = analyze_paragraph("", TextDirection::RightToLeft);
         assert!(para.runs.is_empty());
         assert_eq!(para.para_level, 1);
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::font::resolve::resolve_font;
+
+    const NOTO_SANS: &[u8] = include_bytes!("../../test-fonts/NotoSans-Variable.ttf");
+
+    fn glyphs(text: &str, language: Option<&str>) -> Vec<u16> {
+        let mut registry = FontRegistry::new_without_system_fonts();
+        let face = registry.register_font(NOTO_SANS)[0];
+        registry.set_default_font(face, 16.0);
+        let resolved = resolve_font(&registry, None, None, None, None, None, 1.0, 1.0).unwrap();
+        let run = shape_text_in_paragraph(
+            &registry,
+            &resolved,
+            text,
+            0,
+            TextDirection::Auto,
+            &[],
+            &ScriptContext::in_language(text, language),
+            0,
+        )
+        .unwrap();
+        run.glyphs.iter().map(|g| g.glyph_id).collect()
+    }
+
+    #[test]
+    fn the_shaper_is_told_the_language() {
+        // Noto Sans' `locl` for Romanian draws ş and ţ (cedilla) with the
+        // comma below Romanian writes; no language, or English, keeps the
+        // cedilla.
+        let text = "\u{015F}\u{0163}";
+        let none = glyphs(text, None);
+        assert_eq!(glyphs(text, Some("en")), none);
+        assert_ne!(glyphs(text, Some("ro")), none, "Romanian forms");
+        assert_eq!(glyphs(text, Some("ro-RO")), glyphs(text, Some("ro")));
+    }
+
+    #[test]
+    fn a_tag_the_shaper_cannot_read_is_no_language() {
+        assert_eq!(shaping_language(None), None);
+        assert_eq!(shaping_language(Some("  ")), None);
+        assert!(shaping_language(Some("sr-Cyrl")).is_some());
     }
 }

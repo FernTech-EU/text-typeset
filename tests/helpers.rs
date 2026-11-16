@@ -706,6 +706,8 @@ pub fn make_block_at(id: usize, position: usize, text: &str) -> BlockLayoutParam
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     }
 }
 

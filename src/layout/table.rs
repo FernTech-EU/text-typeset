@@ -3,6 +3,7 @@ use crate::layout::block::{BlockLayout, BlockLayoutParams, layout_block};
 use crate::types::{DecorationKind, DecorationRect};
 
 /// Parameters for a table, extracted from text-document's TableSnapshot.
+#[derive(Clone)]
 pub struct TableLayoutParams {
     pub table_id: usize,
     pub rows: usize,
@@ -17,6 +18,7 @@ pub struct TableLayoutParams {
 }
 
 /// Parameters for a single table cell.
+#[derive(Clone)]
 pub struct CellLayoutParams {
     pub row: usize,
     pub column: usize,

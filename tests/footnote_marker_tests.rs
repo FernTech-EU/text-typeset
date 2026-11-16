@@ -89,6 +89,8 @@ fn block_with_marker(id: usize, marker: Option<&str>) -> BlockLayoutParams {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     }
 }
 

@@ -200,6 +200,8 @@ fn relayout_block_updates_render() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts.relayout_block(&longer);
     let frame2 = ts.render();
@@ -322,6 +324,8 @@ fn multi_fragment_block_renders_all_glyphs() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts.layout_blocks(vec![block]);
     let frame = ts.render();
@@ -418,6 +422,8 @@ fn underline_produces_decoration_rect() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts.layout_blocks(vec![block]);
     let frame = ts.render();
@@ -488,6 +494,8 @@ fn strikeout_produces_decoration_rect() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts.layout_blocks(vec![block]);
     let frame = ts.render();
@@ -579,6 +587,8 @@ fn letter_spacing_increases_total_width() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts2.layout_blocks(vec![spaced]);
     let frame_spaced = ts2.render();
@@ -653,6 +663,8 @@ fn word_spacing_increases_gap_between_words() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts2.layout_blocks(vec![spaced]);
     let frame_spaced = ts2.render();
@@ -831,6 +843,8 @@ fn list_marker_renders_extra_glyphs() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts.layout_blocks(vec![block]);
     let frame = ts.render();
@@ -894,6 +908,8 @@ fn list_marker_positioned_left_of_content() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts.layout_blocks(vec![block]);
     let frame = ts.render();
@@ -975,6 +991,8 @@ fn list_indent_shifts_content_right() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts2.layout_blocks(vec![listed]);
     let frame_listed = ts2.render();
@@ -1481,6 +1499,8 @@ fn underline_inside_table_cell_produces_decoration() {
             hyphenation: None,
             checkbox: None,
             background_color: None,
+            neutral_direction: text_typeset::TextDirection::Auto,
+            language: None,
         }],
         background_color: None,
     };
@@ -1572,6 +1592,8 @@ fn underline_inside_frame_produces_decoration() {
                 hyphenation: None,
                 checkbox: None,
                 background_color: None,
+                neutral_direction: text_typeset::TextDirection::Auto,
+                language: None,
             },
         )],
         tables: vec![],
@@ -1730,6 +1752,8 @@ fn overline_produces_decoration_rect() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts.layout_blocks(vec![block]);
     let frame = ts.render();
@@ -1879,6 +1903,8 @@ fn relayout_block_shifts_table_below() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     };
     ts.set_viewport(200.0, 600.0);
     ts.relayout_block(&longer);
@@ -2275,6 +2301,8 @@ fn make_image_block(id: usize, image_name: &str, width: f32, height: f32) -> Blo
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     }
 }
 
@@ -2482,6 +2510,8 @@ fn mixed_text_and_image_both_render() {
         hyphenation: None,
         checkbox: None,
         background_color: None,
+        neutral_direction: text_typeset::TextDirection::Auto,
+        language: None,
     }]);
     let frame = ts.render();
 

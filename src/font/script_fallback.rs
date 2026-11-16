@@ -19,8 +19,9 @@
 //! unification). Han is therefore drawn for a language, taken from, in this
 //! order:
 //!
-//! 1. the language the host set on the block (today the language of its
-//!    hyphenation, the only language a block carries);
+//! 1. the language the host set on the block or the label
+//!    ([`BlockLayoutParams::language`](crate::layout::block::BlockLayoutParams::language),
+//!    else the flow's default language);
 //! 2. the kana or hangul nearest to it in the same paragraph: kana says
 //!    Japanese, hangul Korean;
 //! 3. the default language the host set on the service
@@ -203,21 +204,42 @@ fn table_script(ch: char) -> Option<TableScript> {
 }
 
 /// The paragraph the text being shaped belongs to, and the language its
-/// block says it is in: what decides the language of its Han.
+/// block says it is in: what decides the language of its Han, and the
+/// language the shaper is told the text is in.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ScriptContext<'a> {
     paragraph: &'a str,
     language: Option<CjkLanguage>,
+    /// The block's language as the host gave it, a BCP 47 tag, for the
+    /// shaper (OpenType `locl`).
+    tag: Option<&'a str>,
 }
 
 impl<'a> ScriptContext<'a> {
     /// `paragraph` is the whole text of the block (or label) being laid out,
-    /// `language` the language the host set on it.
+    /// `language` the CJK language the host set on it.
     pub(crate) fn new(paragraph: &'a str, language: Option<CjkLanguage>) -> Self {
         Self {
             paragraph,
             language,
+            tag: None,
         }
+    }
+
+    /// A context for text the host says is in `tag`, a BCP 47 tag: its Han
+    /// is drawn for that language when it is Chinese, Japanese or Korean, and
+    /// the shaper is told the language.
+    pub(crate) fn in_language(paragraph: &'a str, tag: Option<&'a str>) -> Self {
+        Self {
+            paragraph,
+            language: tag.and_then(CjkLanguage::from_tag),
+            tag: tag.filter(|t| !t.trim().is_empty()),
+        }
+    }
+
+    /// The language the host said the text is in, as it said it.
+    pub(crate) fn language_tag(&self) -> Option<&'a str> {
+        self.tag
     }
 
     /// The language Han at byte `pos` of the paragraph is drawn for, when
@@ -596,6 +618,16 @@ mod tests {
             fragments: &[(&str, bool)],
             hyphenation: Option<crate::types::Hyphenation>,
         ) -> Vec<String> {
+            block_families_in(faces, fragments, hyphenation, None)
+        }
+
+        /// [`block_families`] for a block whose language is `language`.
+        fn block_families_in(
+            faces: &Faces,
+            fragments: &[(&str, bool)],
+            hyphenation: Option<crate::types::Hyphenation>,
+            language: Option<&str>,
+        ) -> Vec<String> {
             use crate::layout::block::{BlockLayoutParams, FragmentParams, layout_block};
             let mut text = String::new();
             let mut params_fragments = Vec::new();
@@ -650,6 +682,8 @@ mod tests {
                 hyphenation,
                 checkbox: None,
                 background_color: None,
+                neutral_direction: crate::shaping::shaper::TextDirection::Auto,
+                language: language.map(str::to_owned),
             };
             let block = layout_block(&faces.registry, &params, 800.0, 1.0, 1.0);
             let default = faces.registry.default_font();
@@ -683,6 +717,39 @@ mod tests {
         }
 
         #[test]
+        fn the_blocks_language_decides_with_hyphenation_off() {
+            let faces = system();
+            let found = block_families_in(&faces, &[("中你好", false)], None, Some("ja"));
+            assert_eq!(found, vec!["Noto Sans CJK JP"; 3]);
+        }
+
+        #[test]
+        fn the_whole_tag_reaches_han_so_traditional_chinese_is_traditional() {
+            // Hyphenation carries two letters, `zh`, which reads as
+            // Simplified; the block's tag says Traditional.
+            let faces = system();
+            let found = block_families_in(
+                &faces,
+                &[("中你好", false)],
+                Some(crate::types::Hyphenation::new(*b"zh")),
+                Some("zh-Hant"),
+            );
+            assert_eq!(found, vec!["Noto Sans CJK TC"; 3]);
+        }
+
+        #[test]
+        fn a_block_with_no_language_takes_its_hyphenations() {
+            let faces = system();
+            let found = block_families_in(
+                &faces,
+                &[("中你好", false)],
+                Some(crate::types::Hyphenation::new(*b"ko")),
+                None,
+            );
+            assert_eq!(found, vec!["Noto Sans CJK KR"; 3]);
+        }
+
+        #[test]
         fn a_label_follows_the_services_default_language() {
             use crate::{DocumentFlow, TextFontService, TextFormat};
             let mut service = TextFontService::new_without_system_fonts();
@@ -704,6 +771,41 @@ mod tests {
             assert_eq!(label(&mut service), vec!["Noto Sans CJK SC"; 3]);
             service.set_default_language(Some("ja-JP"));
             assert_eq!(label(&mut service), vec!["Noto Sans CJK JP"; 3]);
+        }
+
+        #[test]
+        fn a_label_takes_its_flows_language_over_the_services() {
+            use crate::{DocumentFlow, TextFontService, TextFormat};
+            let mut service = TextFontService::new_without_system_fonts();
+            service.font_registry = system().registry;
+            service.set_default_language(Some("ja-JP"));
+            let mut flow = DocumentFlow::new();
+            flow.set_default_language(Some("zh-Hant"));
+            let label = |flow: &mut DocumentFlow, service: &mut TextFontService| {
+                let single =
+                    flow.layout_single_line(service, "中你好", &TextFormat::default(), None, 1.0);
+                let wrapped = flow.layout_paragraph(
+                    service,
+                    "中你好",
+                    &TextFormat::default(),
+                    400.0,
+                    None,
+                    1.0,
+                );
+                [single.glyph_keys, wrapped.glyph_keys]
+                    .iter()
+                    .flatten()
+                    .map(|k| {
+                        service
+                            .font_registry
+                            .font_family_name(k.font_face_id)
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(label(&mut flow, &mut service), vec!["Noto Sans CJK TC"; 6]);
+            flow.set_default_language(None);
+            assert_eq!(label(&mut flow, &mut service), vec!["Noto Sans CJK JP"; 6]);
         }
     }
 }

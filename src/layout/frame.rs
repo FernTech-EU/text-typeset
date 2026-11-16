@@ -40,6 +40,7 @@ pub enum FrameBorderStyle {
 }
 
 /// Parameters for a frame, extracted from text-document's FrameSnapshot.
+#[derive(Clone)]
 pub struct FrameLayoutParams {
     pub frame_id: usize,
     pub position: FramePosition,

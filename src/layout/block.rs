@@ -1,12 +1,12 @@
 use crate::font::registry::FontRegistry;
 use crate::font::resolve::{ResolvedFont, resolve_font};
-use crate::font::script_fallback::{CjkLanguage, ScriptContext};
+use crate::font::script_fallback::ScriptContext;
 use crate::layout::line::LayoutLine;
 use crate::layout::paragraph::{Alignment, Hyphenator, RunOrder, break_into_lines};
 use crate::shaping::run::{ShapedGlyph, ShapedRun};
 use crate::shaping::shaper::{
-    BidiParagraph, FontMetricsPx, TextDirection, analyze_paragraph, font_metrics_px, shape_text,
-    shape_text_in_paragraph, shape_text_with_fallback, to_harfrust_features,
+    BidiParagraph, FontMetricsPx, TextDirection, analyze_paragraph_with_neutral, font_metrics_px,
+    shape_text, shape_text_in_paragraph, shape_text_with_fallback, to_harfrust_features,
 };
 
 /// Computed layout for a single block (paragraph).
@@ -79,6 +79,23 @@ pub struct BlockLayoutParams {
     /// the visual order of a line's runs, and — when `alignment` is
     /// `Start`/`End` — which edge the text sits against.
     pub base_direction: TextDirection,
+    /// The direction an `Auto` paragraph takes when its text has no strongly
+    /// directional character: an empty paragraph, or one of digits, spaces
+    /// and punctuation. UAX #9 says left to right, which `LeftToRight` and
+    /// `Auto` both give; a host whose block is for a right-to-left language
+    /// (an empty field for Arabic) says `RightToLeft`. Ignored when
+    /// `base_direction` is explicit. See
+    /// [`resolve_paragraph_direction`](crate::resolve_paragraph_direction).
+    pub neutral_direction: TextDirection,
+    /// The language the block's text is written in, a BCP 47 tag (`ja`,
+    /// `sr-Cyrl`, `zh-Hant`). `None` when the host did not say.
+    ///
+    /// The shaper is told it, so a font's language-specific forms are used
+    /// (OpenType `locl`), and it decides how Han characters are drawn:
+    /// Japanese, Korean, Simplified or Traditional Chinese forms. Separate from
+    /// [`hyphenation`](Self::hyphenation), which may be off for a block whose
+    /// language is known.
+    pub language: Option<String>,
     /// Line height multiplier. 1.0 = normal (from font metrics), 1.5 = 150%, 2.0 = double.
     /// None means use font metrics (ascent + descent + leading).
     pub line_height_multiplier: Option<f32>,
@@ -222,15 +239,24 @@ pub fn layout_block(
     // neutral character (a space, a comma) depends on the strong
     // characters on *both* sides of it, which a per-fragment analysis
     // cannot see.
-    let bidi = analyze_paragraph(&params.text, params.base_direction);
-    // The paragraph, and the language the block is in (the only one it
-    // carries is its hyphenation's), decide the faces glyph fallback prefers
-    // for Han.
-    let script_context = ScriptContext::new(
+    let bidi = analyze_paragraph_with_neutral(
+        &params.text,
+        params.base_direction,
+        params.neutral_direction,
+    );
+    // The paragraph and the language the block is in decide the faces glyph
+    // fallback prefers for Han, and the language the shaper is told. A block
+    // whose host set no language but asked for hyphenation is taken to be in
+    // the hyphenation's language.
+    let hyphenation_language = params
+        .hyphenation
+        .and_then(|h| std::str::from_utf8(&h.language).ok().map(str::to_owned));
+    let script_context = ScriptContext::in_language(
         &params.text,
         params
-            .hyphenation
-            .and_then(|h| CjkLanguage::from_tag(std::str::from_utf8(&h.language).ok()?)),
+            .language
+            .as_deref()
+            .or(hyphenation_language.as_deref()),
     );
     let base_direction = bidi.base_direction();
 

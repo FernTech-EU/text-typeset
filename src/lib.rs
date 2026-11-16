@@ -105,7 +105,7 @@ pub use layout::block::{PaintSpan, apply_paint_spans};
 pub use layout::inline_markup::{InlineAttrs, InlineMarkup, InlineSpan};
 /// Reading direction of a run or paragraph. Re-exported at the crate
 /// root because hosts need it to interpret `DocumentFlow::direction_at`.
-pub use shaping::shaper::TextDirection;
+pub use shaping::shaper::{TextDirection, resolve_paragraph_direction};
 pub use types::{
     BlockVisualInfo, CharacterGeometry, CursorAffinity, CursorDisplay, DecorationKind,
     DecorationRect, FontFaceId, FontFeature, GeometryDirection, GlyphQuad, HitRegion,
