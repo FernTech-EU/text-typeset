@@ -306,6 +306,16 @@ pub fn break_into_lines(
     hyphenator: Option<Hyphenator>,
     run_order: RunOrder,
 ) -> Vec<LayoutLine> {
+    // A line with no right edge, in an unbounded width (a single-line field
+    // that scrolls rather than wraps), cannot be aligned against one: Right,
+    // Center and Justify would move its text, or an empty line's caret, to
+    // infinity. It starts at the left; a right-to-left paragraph aligns to
+    // the right by default, so without this its text was never seen.
+    let alignment = if available_width.is_finite() {
+        alignment
+    } else {
+        Alignment::Left
+    };
     // Where a glyph-less line puts the caret. The alignment pass below only
     // moves runs, so an empty line must carry this explicitly.
     let empty_caret_x = {

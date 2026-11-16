@@ -577,3 +577,33 @@ fn the_caret_rect_follows_the_chosen_side_of_a_seam() {
     assert!(downstream.iter().all(|v| v.is_finite()));
     assert!(upstream.iter().all(|v| v.is_finite()));
 }
+
+/// A single-line field lays its text out in an unbounded width and scrolls
+/// it. A right-to-left paragraph aligns to its right edge by default, and an
+/// unbounded line has none: its runs and its caret were at x = infinity, so
+/// the text was never seen.
+#[test]
+fn an_rtl_paragraph_in_an_unbounded_width_starts_at_the_left() {
+    let ts = bilingual();
+    let text = format!("{KATABA} {SALAAM}");
+    let mut block = make_block(0, &text);
+    block.alignment = Alignment::Start;
+    let laid = layout_block(ts.font_registry(), &block, f32::INFINITY, 1.0, 1.0);
+    let line = &laid.lines[0];
+    let left = line.runs.iter().map(|r| r.x).fold(f32::INFINITY, f32::min);
+    let right = line
+        .runs
+        .iter()
+        .map(|r| r.x + r.shaped_run.advance_width)
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!(left.is_finite() && left.abs() < 0.5, "starts at {left}");
+    assert!(right.is_finite() && right > 10.0, "ends at {right}");
+    assert_eq!(laid.base_direction, TextDirection::RightToLeft);
+
+    let mut empty = make_block(0, "");
+    empty.alignment = Alignment::Start;
+    empty.base_direction = TextDirection::RightToLeft;
+    let laid = layout_block(ts.font_registry(), &empty, f32::INFINITY, 1.0, 1.0);
+    let caret = laid.lines[0].empty_caret_x;
+    assert!(caret.is_finite(), "an empty line's caret is at {caret}");
+}
