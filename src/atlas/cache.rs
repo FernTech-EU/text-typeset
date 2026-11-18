@@ -24,6 +24,13 @@ pub struct GlyphCacheKey {
     /// slanted for it (see `crate::font::synthesis`), and the slanted bitmap
     /// must not stand in for the upright one.
     pub italic: bool,
+    /// Which of the [`SUBPIXEL_BINS`](crate::atlas::rasterizer::SUBPIXEL_BINS)
+    /// horizontal offsets the bitmap was rasterized at: the glyph's pen
+    /// position fell that many quarters of a pixel past a pixel edge (see
+    /// [`split_subpixel_x`](crate::atlas::rasterizer::split_subpixel_x)).
+    /// `0` for a glyph drawn at a whole pixel, which is every glyph of a
+    /// scaled (unhinted) raster.
+    pub subpixel_x: u8,
 }
 
 impl GlyphCacheKey {
@@ -35,6 +42,7 @@ impl GlyphCacheKey {
             weight: 400,
             hinted: true,
             italic: false,
+            subpixel_x: 0,
         }
     }
 
@@ -52,6 +60,7 @@ impl GlyphCacheKey {
             weight,
             hinted,
             italic: false,
+            subpixel_x: 0,
         }
     }
 
@@ -68,6 +77,15 @@ impl GlyphCacheKey {
         Self {
             italic,
             ..Self::with_weight(font_face_id, glyph_id, size_px, weight, hinted)
+        }
+    }
+
+    /// This key for the bitmap rasterized `bin` quarters of a pixel to the
+    /// right (see [`split_subpixel_x`](crate::atlas::rasterizer::split_subpixel_x)).
+    pub fn at_subpixel_x(self, bin: u8) -> Self {
+        Self {
+            subpixel_x: bin,
+            ..self
         }
     }
 }

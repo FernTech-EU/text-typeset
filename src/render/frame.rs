@@ -1,6 +1,6 @@
 use crate::atlas::allocator::GlyphAtlas;
 use crate::atlas::cache::{CachedGlyph, GlyphCache, GlyphCacheKey};
-use crate::atlas::rasterizer::rasterize_glyph_styled;
+use crate::atlas::rasterizer::{rasterize_glyph_positioned, split_subpixel_x, subpixel_offset};
 use crate::font::registry::FontRegistry;
 use crate::layout::block::BlockLayout;
 use crate::layout::flow::{FlowItem, FlowLayout};
@@ -832,6 +832,16 @@ fn render_run_glyphs(
             }
         };
 
+        // A hinted raster is drawn pixel for pixel, so it is placed at a
+        // whole pixel with the fraction rasterized into the bitmap (see
+        // `SUBPIXEL_BINS`). A scaled raster is drawn under a transform the
+        // renderer does not snap, and keeps its fractional origin.
+        let (origin_x, bin) = if hinted {
+            let (whole, bin) = split_subpixel_x((pen_x + glyph.x_offset) * sf);
+            (whole / sf, bin)
+        } else {
+            (pen_x + glyph.x_offset, 0)
+        };
         let cache_key = GlyphCacheKey::with_style(
             glyph.font_face_id,
             glyph.glyph_id,
@@ -839,7 +849,8 @@ fn render_run_glyphs(
             run.weight as u32,
             hinted,
             run.italic,
-        );
+        )
+        .at_subpixel_x(bin);
         ensure_glyph_cached(
             &cache_key,
             cache,
@@ -861,7 +872,7 @@ fn render_run_glyphs(
             let logical_h = cached.height as f32 * inv_total;
             let logical_left = cached.placement_left as f32 * inv_total;
             let logical_top = cached.placement_top as f32 * inv_total;
-            let screen_x = pen_x + glyph.x_offset + logical_left;
+            let screen_x = origin_x + logical_left;
             let screen_y = baseline_y - glyph.y_offset - logical_top - scroll_offset;
             let color = if cached.is_color {
                 [1.0, 1.0, 1.0, 1.0]
@@ -906,7 +917,7 @@ fn ensure_glyph_cached(
         return;
     }
 
-    let image = match rasterize_glyph_styled(
+    let image = match rasterize_glyph_positioned(
         scale_context,
         font_data,
         face_index,
@@ -916,6 +927,7 @@ fn ensure_glyph_cached(
         font_weight,
         key.hinted,
         key.italic,
+        subpixel_offset(key.subpixel_x),
     ) {
         Some(img) => img,
         None => return,

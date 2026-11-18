@@ -2921,7 +2921,7 @@ fn rasterize_glyph_quad(
     glyph_keys: &mut Vec<crate::atlas::cache::GlyphCacheKey>,
 ) {
     use crate::atlas::cache::GlyphCacheKey;
-    use crate::atlas::rasterizer::rasterize_glyph_styled;
+    use crate::atlas::rasterizer::{rasterize_glyph_positioned, split_subpixel_x, subpixel_offset};
 
     if glyph.glyph_id == 0 {
         return;
@@ -2941,6 +2941,16 @@ fn rasterize_glyph_quad(
     let sf = service.scale_factor.max(f32::MIN_POSITIVE);
     let inv_total = 1.0 / (sf * raster_scale);
     let physical_size_px = run.size_px * sf * raster_scale;
+    // A hinted raster is drawn pixel for pixel, so it is placed at a whole
+    // pixel with the fraction rasterized into the bitmap (see
+    // `SUBPIXEL_BINS`). A scaled raster is drawn under a transform the
+    // renderer does not snap, and keeps its fractional origin.
+    let (origin_x, bin) = if hinted {
+        let (whole, bin) = split_subpixel_x((pen_x + glyph.x_offset) * sf);
+        (whole / sf, bin)
+    } else {
+        (pen_x + glyph.x_offset, 0)
+    };
     let cache_key = GlyphCacheKey::with_style(
         glyph.font_face_id,
         glyph.glyph_id,
@@ -2948,10 +2958,11 @@ fn rasterize_glyph_quad(
         run.weight as u32,
         hinted,
         run.italic,
-    );
+    )
+    .at_subpixel_x(bin);
 
     if service.glyph_cache.peek(&cache_key).is_none()
-        && let Some(image) = rasterize_glyph_styled(
+        && let Some(image) = rasterize_glyph_positioned(
             &mut service.scale_context,
             entry.bytes(),
             entry.face_index,
@@ -2961,6 +2972,7 @@ fn rasterize_glyph_quad(
             run.weight as u32,
             hinted,
             run.italic,
+            subpixel_offset(bin),
         )
         && image.width > 0
         && image.height > 0
@@ -3009,7 +3021,7 @@ fn rasterize_glyph_quad(
         let logical_h = cached.height as f32 * inv_total;
         let logical_left = cached.placement_left as f32 * inv_total;
         let logical_top = cached.placement_top as f32 * inv_total;
-        let screen_x = pen_x + glyph.x_offset + logical_left;
+        let screen_x = origin_x + logical_left;
         let screen_y = baseline - glyph.y_offset - logical_top;
         let color = if cached.is_color {
             [1.0, 1.0, 1.0, 1.0]

@@ -1,5 +1,5 @@
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
-use swash::zeno::{Format, Transform};
+use swash::zeno::{Format, Transform, Vector};
 use swash::{CacheKey, FontRef};
 
 use crate::font::synthesis::{self, FaceSynthesis};
@@ -10,6 +10,40 @@ use crate::font::synthesis::{self, FaceSynthesis};
 /// so the glyph grows by twice what it is given (pinned by
 /// `a_synthetic_bold_glyph_is_as_much_wider_as_its_advance`).
 const EMBOLDEN_TO_SWASH: f32 = 0.5;
+
+/// How many horizontal positions inside a pixel a glyph is rasterized at.
+///
+/// Shaping places glyphs at fractional positions. Drawn at the nearest whole
+/// pixel, each glyph moves by up to half a pixel on its own, so the gap
+/// between two letters is off by up to a whole pixel, which at text sizes is
+/// as wide as the gap itself. Rasterizing each glyph at its position to the
+/// nearest quarter of a pixel keeps every gap within an eighth of a pixel of
+/// what shaping asked for, as Skia, FreeType-based browsers and Core Text do.
+/// Hinting is unaffected: swash hints vertically only, keeping the unhinted
+/// advances (`HintingMode::Smooth` with `preserve_linear_metrics`), so a
+/// fractional horizontal offset does not fight it.
+pub const SUBPIXEL_BINS: u8 = 4;
+
+/// Split a glyph's horizontal pen position in device pixels into the whole
+/// pixel its quad starts at and the bin (`0..SUBPIXEL_BINS`) of the
+/// fraction left over, rounded to the nearest bin; a fraction that rounds up
+/// to a whole pixel moves to the next pixel's bin `0`.
+pub fn split_subpixel_x(device_x: f32) -> (f32, u8) {
+    let base = device_x.floor();
+    let bins = f32::from(SUBPIXEL_BINS);
+    let bin = ((device_x - base) * bins).round();
+    if bin >= bins {
+        (base + 1.0, 0)
+    } else {
+        (base, bin as u8)
+    }
+}
+
+/// The horizontal offset, in device pixels, bitmap bin `bin` is
+/// rasterized at.
+pub fn subpixel_offset(bin: u8) -> f32 {
+    f32::from(bin) / f32::from(SUBPIXEL_BINS)
+}
 
 #[non_exhaustive]
 pub struct GlyphImage {
@@ -61,6 +95,39 @@ pub fn rasterize_glyph_styled(
     font_weight: u32,
     hinted: bool,
     italic: bool,
+) -> Option<GlyphImage> {
+    rasterize_glyph_positioned(
+        scale_context,
+        font_data,
+        face_index,
+        cache_key,
+        glyph_id,
+        size_px,
+        font_weight,
+        hinted,
+        italic,
+        0.0,
+    )
+}
+
+/// [`rasterize_glyph_styled`] with the outline moved `x_offset` device
+/// pixels to the right before it is rasterized (a fraction of a pixel, see
+/// [`SUBPIXEL_BINS`]). The image's `placement_left` counts from the same
+/// origin as without the offset, so a quad placed at `origin +
+/// placement_left` shows the glyph `x_offset` further right. Colour bitmaps
+/// and COLRv1 paints are drawn at the whole pixel whatever the offset.
+#[allow(clippy::too_many_arguments)]
+pub fn rasterize_glyph_positioned(
+    scale_context: &mut ScaleContext,
+    font_data: &[u8],
+    face_index: u32,
+    cache_key: CacheKey,
+    glyph_id: u16,
+    size_px: f32,
+    font_weight: u32,
+    hinted: bool,
+    italic: bool,
+    x_offset: f32,
 ) -> Option<GlyphImage> {
     // swash paints COLRv0 layers and colour bitmaps, not COLRv1, which is
     // painted here (see `crate::atlas::colr`). A face can carry both for one
@@ -114,6 +181,7 @@ pub fn rasterize_glyph_styled(
         Source::Outline,
     ])
     .format(Format::Alpha)
+    .offset(Vector::new(x_offset, 0.0))
     .embolden(embolden)
     .transform(slant)
     .render(&mut scaler, glyph_id);
@@ -129,6 +197,7 @@ pub fn rasterize_glyph_styled(
     if drew_nothing && crate::atlas::colr::has_colr_v1(font_data, face_index, glyph_id) {
         image = Render::new(&[Source::Outline])
             .format(Format::Alpha)
+            .offset(Vector::new(x_offset, 0.0))
             .render(&mut scaler, 0);
     }
     let image = image?;
