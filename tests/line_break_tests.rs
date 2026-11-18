@@ -392,3 +392,80 @@ fn shaping_with_a_recycled_buffer_blanks_a_break_too() {
     let separator = run.glyphs.iter().find(|g| g.cluster == 1).unwrap();
     assert_eq!((separator.glyph_id, separator.x_advance), (0, 0.0));
 }
+
+fn cluster_count(line: &LayoutLine) -> usize {
+    let mut clusters: Vec<u32> = line
+        .runs
+        .iter()
+        .flat_map(|run| run.shaped_run.glyphs.iter().map(|g| g.cluster))
+        .collect();
+    clusters.sort_unstable();
+    clusters.dedup();
+    clusters.len()
+}
+
+fn assert_lines_fit(text: &str, width: f32) {
+    let lines = lines_of(text, width, Alignment::Left);
+    let glyphs: usize = lines
+        .iter()
+        .flat_map(|l| l.runs.iter())
+        .map(|r| r.shaped_run.glyphs.len())
+        .sum();
+    assert_eq!(glyphs, text.chars().count(), "no glyph lost or repeated");
+    for (n, line) in lines.iter().enumerate() {
+        assert!(
+            !line.runs.is_empty(),
+            "line {n} is empty ({text:?} at {width})"
+        );
+        let over = line.width > width + 0.001 || right_edge(line) > width + 0.001;
+        assert!(
+            !over || cluster_count(line) == 1,
+            "line {n} is {} wide (ink to {}) in a {width} line, with {} clusters",
+            line.width,
+            right_edge(line),
+            cluster_count(line)
+        );
+    }
+}
+
+#[test]
+fn an_emergency_break_keeps_every_line_inside_max_width() {
+    for ch in ['a', '*', '-', 'W', 'i'] {
+        for len in [1usize, 2, 5, 17, 72, 200] {
+            for width in [1.0f32, 5.0, 12.0, 33.3, 100.0, 520.0] {
+                assert_lines_fit(&ch.to_string().repeat(len), width);
+            }
+        }
+    }
+}
+
+#[test]
+fn an_emergency_break_never_splits_a_cluster() {
+    // A base letter and its combining mark are one cluster: a line may overflow
+    // by it, but the mark never starts a line of its own.
+    let text = "e\u{0301}".repeat(40);
+    for width in [1.0f32, 9.0, 30.0, 100.0] {
+        let lines = lines_of(&text, width, Alignment::Left);
+        let glyph_clusters = |line: &LayoutLine| -> Vec<u32> {
+            line.runs
+                .iter()
+                .flat_map(|r| r.shaped_run.glyphs.iter().map(|g| g.cluster))
+                .collect()
+        };
+        for pair in lines.windows(2) {
+            let last = *glyph_clusters(&pair[0]).last().unwrap();
+            let first = glyph_clusters(&pair[1])[0];
+            assert_ne!(last, first, "a cluster is split at width {width}");
+        }
+        for line in &lines {
+            assert!(line.width <= width + 0.001 || cluster_count(line) == 1);
+        }
+    }
+}
+
+#[test]
+fn a_line_narrower_than_one_glyph_still_holds_one_cluster_per_line() {
+    let lines = lines_of(&"a".repeat(6), 0.5, Alignment::Left);
+    assert_eq!(lines.len(), 6);
+    assert!(lines.iter().all(|l| cluster_count(l) == 1));
+}

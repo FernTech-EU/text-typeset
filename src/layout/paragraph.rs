@@ -379,19 +379,25 @@ pub fn break_into_lines(
 
         let exceeds_width = line_width > effective_width && line_start_glyph < i;
 
-        if is_mandatory || exceeds_width {
-            let (break_at, needs_hyphen) = if is_mandatory {
-                (i + 1, false)
-            } else if let Some((bp, hy)) = last_break {
-                if bp > line_start_glyph {
-                    (bp, hy)
-                } else {
-                    (i + 1, false) // emergency break -no opportunity found
-                }
-            } else {
-                (i + 1, false) // emergency break -no break opportunities at all
-            };
+        // An emergency break goes before the glyph that overflowed, at the last
+        // cluster boundary after the line's start: the line keeps at least one
+        // cluster and a cluster wider than the line is never split. With no such
+        // boundary the line goes on, and a later glyph asks again.
+        let decision = if is_mandatory {
+            Some((i + 1, false))
+        } else if exceeds_width {
+            match last_break {
+                Some((bp, hy)) if bp > line_start_glyph => Some((bp, hy)),
+                _ => (line_start_glyph + 1..=i)
+                    .rev()
+                    .find(|&k| flat[k].cluster != flat[k - 1].cluster)
+                    .map(|k| (k, false)),
+            }
+        } else {
+            None
+        };
 
+        if let Some((break_at, needs_hyphen)) = decision {
             let indent = if lines.is_empty() {
                 first_line_indent
             } else {
