@@ -1,7 +1,10 @@
 use crate::atlas::allocator::GlyphAtlas;
 use crate::atlas::cache::{CachedGlyph, GlyphCache, GlyphCacheKey};
-use crate::atlas::rasterizer::{rasterize_glyph_positioned, split_subpixel_x, subpixel_offset};
-use crate::font::registry::FontRegistry;
+use crate::atlas::rasterizer::{
+    rasterize_glyph_crisp, rasterize_glyph_positioned, split_subpixel_x, subpixel_offset,
+};
+use crate::font::hinted::GlyphRendering;
+use crate::font::registry::{FontEntry, FontRegistry};
 use crate::layout::block::BlockLayout;
 use crate::layout::flow::{FlowItem, FlowLayout};
 use crate::layout::table::generate_table_decorations;
@@ -812,6 +815,9 @@ fn render_run_glyphs(
         1.0
     };
     let hinted = raster_scale == 1.0;
+    // Crisp glyphs are fitted to the pixels they are drawn on, which only a
+    // raster drawn pixel for pixel has.
+    let crisp = hinted && registry.glyph_rendering() == GlyphRendering::Crisp;
     let sf = scale_factor.max(f32::MIN_POSITIVE);
     let inv_total = 1.0 / (sf * raster_scale);
     let physical_size_px = run.size_px * sf * raster_scale;
@@ -836,7 +842,10 @@ fn render_run_glyphs(
         // whole pixel with the fraction rasterized into the bitmap (see
         // `SUBPIXEL_BINS`). A scaled raster is drawn under a transform the
         // renderer does not snap, and keeps its fractional origin.
-        let (origin_x, bin) = if hinted {
+        // A crisp glyph goes on the nearest whole pixel, fitted to it.
+        let (origin_x, bin) = if crisp {
+            (((pen_x + glyph.x_offset) * sf).round() / sf, 0)
+        } else if hinted {
             let (whole, bin) = split_subpixel_x((pen_x + glyph.x_offset) * sf);
             (whole / sf, bin)
         } else {
@@ -851,14 +860,13 @@ fn render_run_glyphs(
             run.italic,
         )
         .at_subpixel_x(bin);
+        let cache_key = if crisp { cache_key.crisp() } else { cache_key };
         ensure_glyph_cached(
             &cache_key,
             cache,
             atlas,
             scale_context,
-            entry.bytes(),
-            entry.face_index,
-            entry.swash_cache_key,
+            entry,
             physical_size_px,
             run.weight as u32,
             eviction_epoch,
@@ -906,9 +914,7 @@ fn ensure_glyph_cached(
     cache: &mut GlyphCache,
     atlas: &mut GlyphAtlas,
     scale_context: &mut swash::scale::ScaleContext,
-    font_data: &[u8],
-    face_index: u32,
-    swash_cache_key: swash::CacheKey,
+    entry: &FontEntry,
     size_px: f32,
     font_weight: u32,
     eviction_epoch: &mut u64,
@@ -917,18 +923,25 @@ fn ensure_glyph_cached(
         return;
     }
 
-    let image = match rasterize_glyph_positioned(
-        scale_context,
-        font_data,
-        face_index,
-        swash_cache_key,
-        key.glyph_id,
-        size_px,
-        font_weight,
-        key.hinted,
-        key.italic,
-        subpixel_offset(key.subpixel_x),
-    ) {
+    let crisp = if key.crisp {
+        rasterize_glyph_crisp(entry, key.glyph_id, size_px, font_weight, key.italic)
+    } else {
+        None
+    };
+    let image = match crisp.or_else(|| {
+        rasterize_glyph_positioned(
+            scale_context,
+            entry.bytes(),
+            entry.face_index,
+            entry.swash_cache_key,
+            key.glyph_id,
+            size_px,
+            font_weight,
+            key.hinted,
+            key.italic,
+            subpixel_offset(key.subpixel_x),
+        )
+    }) {
         Some(img) => img,
         None => return,
     };

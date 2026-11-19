@@ -1,6 +1,7 @@
 use harfrust::{Buffer, Direction, Feature, ShapeOptions, ShaperFont, Tag};
 
 use crate::font::color::{GlyphPaint, glyph_paint};
+use crate::font::hinted::{GlyphRendering, crisp_advance, crisp_offset};
 use crate::font::registry::FontRegistry;
 use crate::font::resolve::{
     FaceStyle, Presentation, ResolvedFont, face_covers, find_fallback_face,
@@ -637,6 +638,9 @@ pub(crate) fn shape_text_directed_in(
     if entry.synthesis().synthesizes_bold(resolved.weight) {
         total_advance = widen_for_synthetic_bold(&mut glyphs, resolved.size_px);
     }
+    if registry.glyph_rendering() == GlyphRendering::Crisp {
+        total_advance = fit_to_device_pixels(registry, resolved, &mut glyphs);
+    }
 
     Some(ShapedRun {
         font_face_id: resolved.font_face_id,
@@ -734,6 +738,9 @@ pub fn shape_text_with_buffer(
     if entry.synthesis().synthesizes_bold(resolved.weight) {
         total_advance = widen_for_synthetic_bold(&mut glyphs, resolved.size_px);
     }
+    if registry.glyph_rendering() == GlyphRendering::Crisp {
+        total_advance = fit_to_device_pixels(registry, resolved, &mut glyphs);
+    }
 
     let run = ShapedRun {
         font_face_id: resolved.font_face_id,
@@ -769,6 +776,40 @@ pub fn shape_text_with_buffer(
     // drops the contents and segment properties.
     buffer.clear();
     Some((run, buffer))
+}
+
+/// [`GlyphRendering::Crisp`]: give every glyph its hinted advance in whole
+/// device pixels, keeping what the shaper added to the design advance
+/// (kerning, synthetic bold) rounded to a pixel, and round its offsets to a
+/// pixel too, so the layout measures the text as it is drawn. A glyph the
+/// hinter cannot fit keeps its advance rounded. Returns the run's advance.
+fn fit_to_device_pixels(
+    registry: &FontRegistry,
+    resolved: &ResolvedFont,
+    glyphs: &mut [ShapedGlyph],
+) -> f32 {
+    let sf = resolved.scale_factor.max(f32::MIN_POSITIVE);
+    let ppem = resolved.size_px * sf;
+    for glyph in glyphs.iter_mut() {
+        if glyph.x_advance != 0.0 {
+            let fitted = registry.get(glyph.font_face_id).and_then(|entry| {
+                entry.hint_cache().advances(
+                    entry.bytes(),
+                    entry.face_index,
+                    glyph.glyph_id,
+                    ppem,
+                    resolved.weight,
+                )
+            });
+            glyph.x_advance = match fitted {
+                Some((hinted, linear)) => crisp_advance(glyph.x_advance, hinted, linear, sf),
+                None => crisp_offset(glyph.x_advance, sf),
+            };
+        }
+        glyph.x_offset = crisp_offset(glyph.x_offset, sf);
+        glyph.y_offset = crisp_offset(glyph.y_offset, sf);
+    }
+    glyphs.iter().map(|g| g.x_advance).sum()
 }
 
 /// Widen every advancing glyph by what synthetic bold adds to its outline

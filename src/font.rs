@@ -1,4 +1,5 @@
 pub(crate) mod color;
+pub mod hinted;
 pub mod registry;
 pub mod resolve;
 pub(crate) mod script_fallback;

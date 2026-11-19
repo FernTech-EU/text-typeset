@@ -2921,7 +2921,9 @@ fn rasterize_glyph_quad(
     glyph_keys: &mut Vec<crate::atlas::cache::GlyphCacheKey>,
 ) {
     use crate::atlas::cache::GlyphCacheKey;
-    use crate::atlas::rasterizer::{rasterize_glyph_positioned, split_subpixel_x, subpixel_offset};
+    use crate::atlas::rasterizer::{
+        rasterize_glyph_crisp, rasterize_glyph_positioned, split_subpixel_x, subpixel_offset,
+    };
 
     if glyph.glyph_id == 0 {
         return;
@@ -2938,6 +2940,10 @@ fn rasterize_glyph_quad(
         1.0
     };
     let hinted = raster_scale == 1.0;
+    // Crisp glyphs are fitted to the pixels they are drawn on, which only a
+    // raster drawn pixel for pixel has.
+    let crisp = hinted
+        && service.font_registry.glyph_rendering() == crate::font::hinted::GlyphRendering::Crisp;
     let sf = service.scale_factor.max(f32::MIN_POSITIVE);
     let inv_total = 1.0 / (sf * raster_scale);
     let physical_size_px = run.size_px * sf * raster_scale;
@@ -2945,7 +2951,10 @@ fn rasterize_glyph_quad(
     // pixel with the fraction rasterized into the bitmap (see
     // `SUBPIXEL_BINS`). A scaled raster is drawn under a transform the
     // renderer does not snap, and keeps its fractional origin.
-    let (origin_x, bin) = if hinted {
+    // A crisp glyph goes on the nearest whole pixel, fitted to it.
+    let (origin_x, bin) = if crisp {
+        (((pen_x + glyph.x_offset) * sf).round() / sf, 0)
+    } else if hinted {
         let (whole, bin) = split_subpixel_x((pen_x + glyph.x_offset) * sf);
         (whole / sf, bin)
     } else {
@@ -2960,20 +2969,34 @@ fn rasterize_glyph_quad(
         run.italic,
     )
     .at_subpixel_x(bin);
+    let cache_key = if crisp { cache_key.crisp() } else { cache_key };
 
     if service.glyph_cache.peek(&cache_key).is_none()
-        && let Some(image) = rasterize_glyph_positioned(
-            &mut service.scale_context,
-            entry.bytes(),
-            entry.face_index,
-            entry.swash_cache_key,
-            glyph.glyph_id,
-            physical_size_px,
-            run.weight as u32,
-            hinted,
-            run.italic,
-            subpixel_offset(bin),
-        )
+        && let Some(image) = crisp
+            .then(|| {
+                rasterize_glyph_crisp(
+                    entry,
+                    glyph.glyph_id,
+                    physical_size_px,
+                    run.weight as u32,
+                    run.italic,
+                )
+            })
+            .flatten()
+            .or_else(|| {
+                rasterize_glyph_positioned(
+                    &mut service.scale_context,
+                    entry.bytes(),
+                    entry.face_index,
+                    entry.swash_cache_key,
+                    glyph.glyph_id,
+                    physical_size_px,
+                    run.weight as u32,
+                    hinted,
+                    run.italic,
+                    subpixel_offset(bin),
+                )
+            })
         && image.width > 0
         && image.height > 0
     {

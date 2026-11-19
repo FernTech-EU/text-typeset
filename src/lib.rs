@@ -115,6 +115,7 @@ pub use types::{
 };
 
 pub use document_flow::{ContentWidthMode, DocumentFlow, RelayoutError, quantize_raster_scale};
+pub use font::hinted::GlyphRendering;
 pub use font::{
     FontFamilyInfo, SharedFontData, WritingSystem, WritingSystemIndexBuilder, WritingSystemSet,
 };

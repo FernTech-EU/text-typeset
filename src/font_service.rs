@@ -43,6 +43,7 @@
 
 use crate::atlas::allocator::GlyphAtlas;
 use crate::atlas::cache::GlyphCache;
+use crate::font::hinted::GlyphRendering;
 use crate::font::registry::FontRegistry;
 use crate::font::resolve::resolve_font;
 use crate::shaping::shaper::font_metrics_px;
@@ -267,6 +268,29 @@ impl TextFontService {
             // Shaped runs chose their fallback faces by the old language.
             self.scale_generation = self.scale_generation.wrapping_add(1);
         }
+    }
+
+    /// Set how glyphs are fitted to the pixel grid (see [`GlyphRendering`]).
+    ///
+    /// [`GlyphRendering::Crisp`] changes the advances text is laid out with,
+    /// so a change marks every flow laid out against this service as stale,
+    /// as a scale factor change does: [`scale_generation`](Self::scale_generation)
+    /// moves, so [`DocumentFlow::layout_dirty_for_scale`] answers true until
+    /// the flow is laid out again. Setting the mode it already has changes
+    /// nothing. Glyphs already in the atlas stay valid: the crisp ones are
+    /// cached under keys of their own.
+    ///
+    /// [`DocumentFlow::layout_dirty_for_scale`]: crate::DocumentFlow::layout_dirty_for_scale
+    pub fn set_glyph_rendering(&mut self, rendering: GlyphRendering) {
+        if self.font_registry.set_glyph_rendering(rendering) {
+            self.scale_generation = self.scale_generation.wrapping_add(1);
+        }
+    }
+
+    /// How glyphs are fitted to the pixel grid (default
+    /// [`GlyphRendering::Natural`]).
+    pub fn glyph_rendering(&self) -> GlyphRendering {
+        self.font_registry.glyph_rendering()
     }
 
     /// Map a generic family name (e.g. `"serif"`, `"monospace"`) to a

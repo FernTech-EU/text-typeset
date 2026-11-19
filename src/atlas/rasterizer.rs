@@ -2,6 +2,8 @@ use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Format, Transform, Vector};
 use swash::{CacheKey, FontRef};
 
+use crate::font::color::{GlyphPaint, glyph_paint};
+use crate::font::registry::FontEntry;
 use crate::font::synthesis::{self, FaceSynthesis};
 
 /// swash's `embolden` strength for an outline that should end up
@@ -240,4 +242,92 @@ pub fn rasterize_glyph_positioned(
         data: image.data,
         is_color,
     })
+}
+
+/// Rasterize `glyph_id` for [`GlyphRendering::Crisp`](crate::GlyphRendering::Crisp):
+/// the autohinter's outline, fitted to the pixel grid on both axes, at
+/// `size_px` device pixels and `font_weight`, its origin on a whole pixel.
+///
+/// `None` for what the crisp path does not draw, which the caller then draws
+/// with [`rasterize_glyph_positioned`]: a colour glyph, a glyph the face
+/// synthesizes bold or slanted, and a glyph with no outline (a space).
+pub fn rasterize_glyph_crisp(
+    entry: &FontEntry,
+    glyph_id: u16,
+    size_px: f32,
+    font_weight: u32,
+    italic: bool,
+) -> Option<GlyphImage> {
+    let weight = font_weight.min(1000) as u16;
+    let synthesis = entry.synthesis();
+    if synthesis.synthesizes_bold(weight) || synthesis.synthesizes_oblique(italic) {
+        return None;
+    }
+    if glyph_paint(entry, glyph_id) == GlyphPaint::Color {
+        return None;
+    }
+    let mut pen = ZenoPen::default();
+    if !entry.hint_cache().draw(
+        entry.bytes(),
+        entry.face_index,
+        glyph_id,
+        size_px,
+        weight,
+        &mut pen,
+    ) || pen.commands.is_empty()
+    {
+        return None;
+    }
+    let mut mask = swash::zeno::Mask::new(&pen.commands[..]);
+    // `inspect` sizes the mask first: `render` alone measures the top of a
+    // bottom-left mask from a height it has not computed yet, which puts
+    // every glyph its own height too high.
+    mask.format(Format::Alpha)
+        .origin(swash::zeno::Origin::BottomLeft)
+        .inspect(|_, _, _| {});
+    let (data, placement) = mask.render();
+    if placement.width == 0 || placement.height == 0 {
+        return None;
+    }
+    Some(GlyphImage {
+        width: placement.width,
+        height: placement.height,
+        placement_left: placement.left,
+        placement_top: placement.top,
+        data,
+        is_color: false,
+    })
+}
+
+/// Collects a skrifa outline as zeno path commands.
+#[derive(Default)]
+struct ZenoPen {
+    commands: Vec<swash::zeno::Command>,
+}
+
+impl skrifa::outline::OutlinePen for ZenoPen {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.commands
+            .push(swash::zeno::Command::MoveTo([x, y].into()));
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.commands
+            .push(swash::zeno::Command::LineTo([x, y].into()));
+    }
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        self.commands.push(swash::zeno::Command::QuadTo(
+            [cx0, cy0].into(),
+            [x, y].into(),
+        ));
+    }
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        self.commands.push(swash::zeno::Command::CurveTo(
+            [cx0, cy0].into(),
+            [cx1, cy1].into(),
+            [x, y].into(),
+        ));
+    }
+    fn close(&mut self) {
+        self.commands.push(swash::zeno::Command::Close);
+    }
 }

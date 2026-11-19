@@ -31,6 +31,10 @@ pub struct GlyphCacheKey {
     /// `0` for a glyph drawn at a whole pixel, which is every glyph of a
     /// scaled (unhinted) raster.
     pub subpixel_x: u8,
+    /// Whether the bitmap is fitted to the pixel grid on both axes
+    /// ([`GlyphRendering::Crisp`](crate::GlyphRendering::Crisp)): it must not
+    /// stand in for the vertically-hinted one, nor the other way round.
+    pub crisp: bool,
 }
 
 impl GlyphCacheKey {
@@ -43,6 +47,7 @@ impl GlyphCacheKey {
             hinted: true,
             italic: false,
             subpixel_x: 0,
+            crisp: false,
         }
     }
 
@@ -61,6 +66,7 @@ impl GlyphCacheKey {
             hinted,
             italic: false,
             subpixel_x: 0,
+            crisp: false,
         }
     }
 
@@ -82,6 +88,16 @@ impl GlyphCacheKey {
 
     /// This key for the bitmap rasterized `bin` quarters of a pixel to the
     /// right (see [`split_subpixel_x`](crate::atlas::rasterizer::split_subpixel_x)).
+    /// This key for the crisp bitmap of the glyph (see
+    /// [`GlyphRendering::Crisp`](crate::GlyphRendering::Crisp)).
+    pub fn crisp(self) -> Self {
+        Self {
+            crisp: true,
+            subpixel_x: 0,
+            ..self
+        }
+    }
+
     pub fn at_subpixel_x(self, bin: u8) -> Self {
         Self {
             subpixel_x: bin,

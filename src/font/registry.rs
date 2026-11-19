@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use fontdb::{Database, Family, Query, Source, Stretch, Style, Weight};
 
 use crate::font::color::ColorTables;
+use crate::font::hinted::{GlyphRendering, HintCache};
 use crate::font::script_fallback::{CjkLanguage, Platform};
 use crate::font::synthesis::FaceSynthesis;
 use crate::font::writing_system_index::{
@@ -86,6 +87,9 @@ pub struct FontEntry {
     /// The face's weight and slant, read on first use by the shaper (see
     /// [`crate::font::synthesis`]).
     synthesis: OnceLock<FaceSynthesis>,
+    /// Hinting instances and hinted advances for
+    /// [`GlyphRendering::Crisp`], built on first use.
+    hint_cache: HintCache,
 }
 
 impl FontEntry {
@@ -129,6 +133,11 @@ impl FontEntry {
             .get_or_init(|| FaceSynthesis::read(self.bytes(), self.face_index))
     }
 
+    /// This face's crisp hinting state (see [`GlyphRendering::Crisp`]).
+    pub(crate) fn hint_cache(&self) -> &HintCache {
+        &self.hint_cache
+    }
+
     /// This face's colour tables, read on first use.
     pub(crate) fn color_tables(&self) -> &ColorTables {
         self.color_tables
@@ -151,6 +160,8 @@ pub struct FontRegistry {
     /// Whose faces the fallback table names: this system's, or another's in
     /// a test.
     fallback_platform: Platform,
+    /// How glyphs are fitted to the pixel grid, for shaping and drawing.
+    glyph_rendering: GlyphRendering,
 }
 
 impl Default for FontRegistry {
@@ -187,6 +198,7 @@ impl FontRegistry {
             default_size_px: 16.0,
             default_language: None,
             fallback_platform: Platform::CURRENT,
+            glyph_rendering: GlyphRendering::Natural,
         }
     }
 
@@ -224,6 +236,7 @@ impl FontRegistry {
                 shaping_font: OnceLock::new(),
                 color_tables: OnceLock::new(),
                 synthesis: OnceLock::new(),
+                hint_cache: HintCache::default(),
             };
             let face_id = FontFaceId(self.fonts.len() as u32);
             self.fonts.push(Some(entry));
@@ -269,6 +282,7 @@ impl FontRegistry {
                 shaping_font: OnceLock::new(),
                 color_tables: OnceLock::new(),
                 synthesis: OnceLock::new(),
+                hint_cache: HintCache::default(),
             };
 
             let face_id = FontFaceId(self.fonts.len() as u32);
@@ -326,6 +340,7 @@ impl FontRegistry {
                     shaping_font: OnceLock::new(),
                     color_tables: OnceLock::new(),
                     synthesis: OnceLock::new(),
+                    hint_cache: HintCache::default(),
                 };
 
                 let face_id = FontFaceId(self.fonts.len() as u32);
@@ -359,6 +374,18 @@ impl FontRegistry {
         let changed = language != self.default_language;
         self.default_language = language;
         changed
+    }
+
+    /// Set how glyphs are fitted to the pixel grid; whether it changed.
+    pub(crate) fn set_glyph_rendering(&mut self, rendering: GlyphRendering) -> bool {
+        let changed = rendering != self.glyph_rendering;
+        self.glyph_rendering = rendering;
+        changed
+    }
+
+    /// How glyphs are fitted to the pixel grid.
+    pub fn glyph_rendering(&self) -> GlyphRendering {
+        self.glyph_rendering
     }
 
     pub(crate) fn default_language(&self) -> Option<CjkLanguage> {
