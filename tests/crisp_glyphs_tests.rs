@@ -9,7 +9,7 @@ use text_typeset::font::resolve::resolve_font;
 use text_typeset::shaping::shaper::shape_text;
 use text_typeset::{GlyphRendering, TextFormat};
 
-const TEXT: &str = "Livre complet · Ouverts Résolus illi mimi sœurs étaient";
+const TEXT: &str = "Livre · Synopsis · Ouverts Résolus illi mimi sœurs étaient";
 
 fn crisp_typesetter(scale: f32) -> Typesetter {
     let mut ts = make_typesetter();
