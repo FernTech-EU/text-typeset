@@ -97,6 +97,12 @@ pub struct GlyphQuad {
 #[non_exhaustive]
 pub struct ImageQuad {
     /// Screen position and size: `[x, y, width, height]` in pixels.
+    ///
+    /// The size is the laid-out one: an image wider than its line's measure
+    /// is capped to that measure, its height scaled by the same factor, so
+    /// this can be smaller than the size the document stores. A host that
+    /// draws a resize grip or reports the size the writer sees takes it from
+    /// here, not from the document.
     pub screen: [f32; 4],
     /// Image resource name (matches `FragmentContent::Image::name` from text-document).
     pub name: String,

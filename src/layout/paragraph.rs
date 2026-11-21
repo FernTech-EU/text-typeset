@@ -295,9 +295,13 @@ fn reorder_line_visually(line: &mut LayoutLine) {
 /// 4. Greedy line wrapping: accumulate glyph advances, break at the last
 ///    allowed opportunity before exceeding the width.
 /// 5. Apply alignment per line.
+///
+/// An inline image wider than the paragraph's measure is first scaled down to
+/// fit it, its height by the same factor, before any line is built, so a line,
+/// its selection, caret and hit test and the painted quad all see one size.
 #[allow(clippy::too_many_arguments)]
 pub fn break_into_lines(
-    runs: Vec<ShapedRun>,
+    mut runs: Vec<ShapedRun>,
     text: &str,
     available_width: f32,
     alignment: Alignment,
@@ -330,6 +334,13 @@ pub fn break_into_lines(
         // Empty paragraph: produce one empty line for the block to have height
         return vec![make_empty_line(metrics, 0..0, empty_caret_x)];
     }
+
+    // Before anything reads an advance: the line breaker, the line's ascent,
+    // the selection, the caret, the hit test and the painted quad all take the
+    // image's size from its run, so scaling it here is what keeps them agreeing.
+    // The first line is the narrowest whatever the indent's sign, so measuring
+    // against it is what lets an image that opens an indented paragraph fit.
+    fit_images_to_measure(&mut runs, available_width - first_line_indent.max(0.0));
 
     // Flatten all glyphs into a single sequence with their run association, in
     // logical order when the runs come in logical order (see `flatten_runs`).
@@ -575,6 +586,44 @@ pub fn break_into_lines(
     }
 
     lines
+}
+
+/// Scale every inline image wider than `measure` down to it, keeping its
+/// proportions. Never scales up.
+///
+/// An image is set at its own size until it no longer fits the line it sits on,
+/// the CSS `max-width: 100%` of a replaced element. Without this a picture wider
+/// than the column (a screenshot from a high-density screen, a photograph at its
+/// pixel size) ran past the frame's edge, and the line, the selection and the hit
+/// test ran with it. The measure is the paragraph's own, after its margins, list
+/// indent and the cell or quote it sits in, not the room left after the text
+/// before it on the line: an image that does not fit there breaks onto a line of
+/// its own, as it always has, and is then capped to the whole measure.
+///
+/// The size a host stored is never changed: shaping starts again from it on every
+/// layout, so a narrower and then a wider measure give the same result as the wider
+/// one alone. A measure that is not a positive finite number (an unbounded
+/// single-line field, a frame not sized yet) leaves images alone, and neither side
+/// of a scaled image goes below one pixel.
+fn fit_images_to_measure(runs: &mut [ShapedRun], measure: f32) {
+    if !measure.is_finite() || measure <= 0.0 {
+        return;
+    }
+    let measure = measure.max(1.0);
+    for run in runs.iter_mut().filter(|r| r.image_name.is_some()) {
+        let width = run.advance_width;
+        if !width.is_finite() || width <= measure {
+            continue;
+        }
+        let factor = measure / width;
+        for glyph in &mut run.glyphs {
+            glyph.x_advance *= factor;
+        }
+        run.advance_width = measure;
+        if run.image_height.is_finite() && run.image_height > 0.0 {
+            run.image_height = (run.image_height * factor).max(1.0);
+        }
+    }
 }
 
 /// A flattened glyph with enough info to map back to runs.

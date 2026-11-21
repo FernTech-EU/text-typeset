@@ -58,7 +58,7 @@ Put the service behind whatever smart pointer your host framework uses (an `Rc<R
 text-typeset produces a `RenderFrame` containing:
 
 - **Glyph quads** (`[screen_rect, atlas_rect, color]`) drawn as textured rectangles from the atlas
-- **Image quads** (position + resource name) for inline images loaded by the adapter
+- **Image quads** (position + resource name) for inline images loaded by the adapter. An image wider than its line's measure is laid out and painted at that measure, its height scaled to keep its proportions; the size the host stored is not changed
 - **Decoration rects** (underline, strikeout, selection, cursor, table borders, backgrounds)
 - **Atlas texture** (RGBA, updated incrementally)
 
