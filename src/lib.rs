@@ -108,7 +108,7 @@ pub use layout::inline_markup::{InlineAttrs, InlineMarkup, InlineSpan};
 pub use shaping::shaper::{TextDirection, resolve_paragraph_direction};
 pub use types::{
     BlockVisualInfo, CharacterGeometry, CursorAffinity, CursorDisplay, DecorationKind,
-    DecorationRect, FontFaceId, FontFeature, GeometryDirection, GlyphQuad, HitRegion,
+    DecorationRect, DimOutside, FontFaceId, FontFeature, GeometryDirection, GlyphQuad, HitRegion,
     HitTestResult, Hyphenation, ImageQuad, LaidOutSpan, LaidOutSpanKind, LayoutGeometry, LineEnd,
     LineGeometry, LineSegment, LineTruncation, LinkGeometry, ParagraphResult, RenderFrame,
     SingleLineResult, TableVisualInfo, TextFormat, UnderlineStyle, VerticalAlignment,

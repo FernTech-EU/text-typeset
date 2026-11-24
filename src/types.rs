@@ -35,12 +35,16 @@ pub struct RenderFrame {
     /// Decoration rectangles: selections, cursor, underlines, strikeouts,
     /// overlines, backgrounds, table borders, and cell backgrounds.
     pub decorations: Vec<DecorationRect>,
-    /// Per-block glyph data for incremental updates. Keyed by block_id.
-    pub(crate) block_glyphs: Vec<(usize, Vec<GlyphQuad>)>,
-    /// Per-block decoration data (underlines, etc. — NOT cursor/selection).
-    pub(crate) block_decorations: Vec<(usize, Vec<DecorationRect>)>,
-    /// Per-block image data for incremental updates.
-    pub(crate) block_images: Vec<(usize, Vec<ImageQuad>)>,
+    /// Per-item glyph data for incremental updates: one entry per top-level
+    /// block, table and frame drawn, in flow order.
+    pub(crate) block_glyphs: Vec<(FlowItemKey, Vec<GlyphQuad>)>,
+    /// Per-item text decorations (underlines, highlights, squiggles; NOT the
+    /// cursor or selection, and NOT the table and top-level frame borders,
+    /// which `rebuild_flat_frame` regenerates). A table's and a frame's carry
+    /// the decorations of every block inside them.
+    pub(crate) block_decorations: Vec<(FlowItemKey, Vec<DecorationRect>)>,
+    /// Per-item image data for incremental updates.
+    pub(crate) block_images: Vec<(FlowItemKey, Vec<ImageQuad>)>,
     /// Per-block height snapshot for detecting height changes in incremental render.
     pub(crate) block_heights: std::collections::HashMap<usize, f32>,
     /// Per-block glyph cache keys, parallel to [`Self::block_glyphs`]. Used by
@@ -51,7 +55,7 @@ pub struct RenderFrame {
     /// `cache.get()` path that refreshes timestamps) would age out and
     /// their atlas slots could be reallocated for unrelated glyphs,
     /// silently corrupting the cached `GlyphQuad`s' atlas references.
-    pub(crate) block_glyph_keys: Vec<(usize, Vec<crate::atlas::cache::GlyphCacheKey>)>,
+    pub(crate) block_glyph_keys: Vec<(FlowItemKey, Vec<crate::atlas::cache::GlyphCacheKey>)>,
     /// Flat glyph cache keys, parallel to [`Self::glyphs`]. Rebuilt from
     /// [`Self::block_glyph_keys`] by `rebuild_flat_frame`; passed to
     /// [`crate::TextFontService::touch_glyphs`] on every cursor-only /
@@ -64,6 +68,20 @@ pub struct RenderFrame {
     /// happened since — defensive safety net behind the `touch_glyphs`
     /// keep-alive mechanism.
     pub(crate) atlas_eviction_epoch: u64,
+}
+
+/// Which flow item a cached slice of a [`RenderFrame`] belongs to.
+///
+/// Blocks, tables and frames are numbered separately by the document (each
+/// kind of entity has its own counter), so a bare id is ambiguous: a block and
+/// a blockquote frame can both be number 2. Keyed by id alone, re-rendering
+/// block 2 replaced the frame's cached glyphs with the block's, so the quote
+/// vanished and the paragraph was drawn twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum FlowItemKey {
+    Block(usize),
+    Table(usize),
+    Frame(usize),
 }
 
 /// A positioned glyph to draw as a textured quad from the atlas.
@@ -113,18 +131,215 @@ pub struct ImageQuad {
     /// THIS image inside the selection" needs the offset. Same value, derived
     /// the same way, as the offset `hit_test` reports for a click on it.
     pub char_offset: usize,
+    /// How opaque to draw the picture, `0.0`–`1.0`. `1.0` unless the image
+    /// lies outside a [`DimOutside`] range, where it is that range's
+    /// `opacity`. A glyph carries the same information in its colour's
+    /// alpha; an image has no colour, so it needs its own field.
+    pub opacity: f32,
 }
 
 impl ImageQuad {
     /// An image placement: `screen` as `[x, y, width, height]`, the resource
-    /// `name`, and the `char_offset` of its `U+FFFC`. For a host that stands
-    /// in for the typesetter, a test for instance.
+    /// `name`, and the `char_offset` of its `U+FFFC`, drawn fully opaque.
+    /// For a host that stands in for the typesetter, a test for instance.
     pub fn new(screen: [f32; 4], name: impl Into<String>, char_offset: usize) -> Self {
         Self {
             screen,
             name: name.into(),
             char_offset,
+            opacity: 1.0,
         }
+    }
+}
+
+/// Draw everything outside one range of the text faded.
+///
+/// The writing-comfort "focus" effect: the sentence or paragraph being
+/// written stays at full strength and the rest of the text fades back. Set
+/// per view with [`DocumentFlow::set_dim_outside`](crate::DocumentFlow::set_dim_outside).
+///
+/// It is applied while the frame is built, from each glyph's position in the
+/// text, so it is exact for ligatures and right-to-left text and costs no
+/// reshaping. What it dims is the **ink**: glyphs, inline images, list
+/// markers, underlines, strikeouts, overlines and spell-check squiggles.
+/// Backgrounds (a block's, a run's highlight), table and frame borders, the
+/// caret and the selection keep their full strength: a background behind
+/// the text is not the text, and a dimmed caret or selection would hide the
+/// very thing the writer is acting on.
+///
+/// ## How the ink fades
+///
+/// With a page colour ([`toward`](Self::toward)), faded ink keeps its alpha
+/// and its colour is mixed toward the page in sRGB: `opacity` of the ink's
+/// own colour, the rest the page's. Without one, the ink's alpha is scaled
+/// by `opacity` instead.
+///
+/// The two are not the same, and the page colour is what makes a strength
+/// mean one thing on every theme. A renderer that blends in linear light (as
+/// GPU pipelines over an sRGB surface do) turns an alpha of `0.35` into near
+/// invisibility for black text on white and into a mild fade for light text
+/// on a dark page. Mixing the colours in sRGB fades both by the same
+/// perceived amount. Colour glyphs (emoji) and images have no single colour
+/// to mix, so they always fade by alpha.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DimOutside {
+    /// Document-absolute character offset where the bright range starts.
+    pub start: usize,
+    /// Document-absolute character offset where it ends (exclusive).
+    ///
+    /// `start == end` is a valid, empty range: everything is dimmed. That is
+    /// what an empty paragraph asks for: there is nothing to keep bright, but
+    /// the rest of the text must still fade.
+    pub end: usize,
+    /// How much of the ink outside the range remains, `0.0`–`1.0`. Clamped
+    /// when used.
+    pub opacity: f32,
+    /// The colour the faded ink is drawn on, `[r, g, b, a]`, sRGB, 0.0–1.0.
+    /// `None` fades by alpha. See the type's documentation.
+    pub toward: Option<[f32; 4]>,
+}
+
+impl DimOutside {
+    /// Keep `[start, end)` bright and fade the rest to `opacity`, by alpha
+    /// until a page colour is given with [`toward`](Self::toward).
+    pub fn new(start: usize, end: usize, opacity: f32) -> Self {
+        Self {
+            start,
+            end,
+            opacity,
+            toward: None,
+        }
+    }
+
+    /// Fade by mixing toward `page`, the colour the text is drawn on, rather
+    /// than by alpha. A translucent `page` cannot be mixed toward (what shows
+    /// through it is unknown), so it is ignored and the fade stays by alpha.
+    pub fn toward(mut self, page: [f32; 4]) -> Self {
+        self.toward = (page[3] >= 1.0).then_some(page);
+        self
+    }
+
+    /// The factor for ink at document position `position`: `1.0` inside the
+    /// range, the clamped opacity outside it.
+    pub(crate) fn factor_at(&self, position: usize) -> f32 {
+        if position >= self.start && position < self.end {
+            1.0
+        } else {
+            self.dim_factor()
+        }
+    }
+
+    /// The factor for ink that belongs to the whole block spanning
+    /// `[block_start, block_end]` rather than to one character: its list or
+    /// checkbox marker. The marker follows its paragraph: it is bright when
+    /// the bright range touches the block, including an empty range sitting
+    /// in it (the caret in an empty list item).
+    pub(crate) fn factor_for_block(&self, block_start: usize, block_end: usize) -> f32 {
+        let touches = if self.start == self.end {
+            self.start >= block_start && self.start <= block_end
+        } else {
+            self.start <= block_end && self.end > block_start
+        };
+        if touches { 1.0 } else { self.dim_factor() }
+    }
+
+    fn dim_factor(&self) -> f32 {
+        if self.opacity.is_finite() {
+            self.opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// `color` faded by `factor` (one of the two above). `mixable` is false
+    /// for ink with no colour of its own to mix (a colour glyph, whose quad
+    /// colour is only a tint), which fades by alpha whatever the page.
+    pub(crate) fn fade(&self, color: [f32; 4], factor: f32, mixable: bool) -> [f32; 4] {
+        if factor >= 1.0 {
+            return color;
+        }
+        match self.toward {
+            Some(page) if mixable => {
+                let mix = |ink: f32, paper: f32| ink * factor + paper * (1.0 - factor);
+                [
+                    mix(color[0], page[0]),
+                    mix(color[1], page[1]),
+                    mix(color[2], page[2]),
+                    color[3],
+                ]
+            }
+            _ => [color[0], color[1], color[2], color[3] * factor],
+        }
+    }
+
+    /// The smallest range of positions whose look differs between `self` and
+    /// `other`, as `[lo, hi)`. `None` when every position is drawn the same
+    /// under both, and the whole space when the change is not confined to
+    /// positions at all (a different opacity or page colour changes every
+    /// faded glyph).
+    pub(crate) fn changed_hull(&self, other: &DimOutside) -> Option<(usize, usize)> {
+        if self == other {
+            return None;
+        }
+        // The effective factors, not the raw opacities: NaN, which fades nothing, compares
+        // unequal to everything without differing from it by more than any epsilon.
+        if self.dim_factor() != other.dim_factor() || self.toward != other.toward {
+            return Some((0, usize::MAX));
+        }
+        Some((self.start.min(other.start), self.end.max(other.end)))
+    }
+}
+
+#[cfg(test)]
+mod dim_outside_tests {
+    use super::DimOutside;
+
+    const INK: [f32; 4] = [0.1, 0.2, 0.3, 1.0];
+    const PAGE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
+    #[test]
+    fn without_a_page_the_alpha_fades() {
+        let dim = DimOutside::new(0, 0, 0.4);
+        assert_eq!(dim.fade(INK, 0.4, true), [0.1, 0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn with_a_page_the_colour_is_mixed_and_the_alpha_kept() {
+        let dim = DimOutside::new(0, 0, 0.4).toward(PAGE);
+        let [r, g, b, a] = dim.fade(INK, 0.4, true);
+        assert!((r - (0.1 * 0.4 + 0.6)).abs() < 1e-6);
+        assert!((g - (0.2 * 0.4 + 0.6)).abs() < 1e-6);
+        assert!((b - (0.3 * 0.4 + 0.6)).abs() < 1e-6);
+        assert_eq!(a, 1.0, "coverage is the glyph's, not the fade's");
+    }
+
+    #[test]
+    fn ink_with_no_colour_of_its_own_fades_by_alpha_even_with_a_page() {
+        let dim = DimOutside::new(0, 0, 0.4).toward(PAGE);
+        assert_eq!(
+            dim.fade([1.0, 1.0, 1.0, 1.0], 0.4, false),
+            [1.0, 1.0, 1.0, 0.4]
+        );
+    }
+
+    #[test]
+    fn bright_ink_is_untouched() {
+        let dim = DimOutside::new(0, 0, 0.4).toward(PAGE);
+        assert_eq!(dim.fade(INK, 1.0, true), INK);
+    }
+
+    #[test]
+    fn a_translucent_page_is_not_mixed_toward() {
+        let dim = DimOutside::new(0, 0, 0.4).toward([1.0, 1.0, 1.0, 0.5]);
+        assert_eq!(dim.toward, None);
+    }
+
+    #[test]
+    fn a_new_page_colour_changes_everything() {
+        let light = DimOutside::new(0, 5, 0.4).toward(PAGE);
+        let dark = DimOutside::new(0, 5, 0.4).toward([0.1, 0.1, 0.1, 1.0]);
+        assert_eq!(light.changed_hull(&dark), Some((0, usize::MAX)));
+        assert_eq!(light.changed_hull(&light), None);
     }
 }
 

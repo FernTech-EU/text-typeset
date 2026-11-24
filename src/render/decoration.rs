@@ -2,10 +2,14 @@ use crate::font::registry::FontRegistry;
 use crate::font::resolve::ResolvedFont;
 use crate::layout::block::BlockLayout;
 use crate::shaping::shaper::{FontMetricsPx, font_metrics_px};
-use crate::types::{DecorationKind, DecorationRect, UnderlineStyle};
+use crate::types::{DecorationKind, DecorationRect, DimOutside, UnderlineStyle};
 
 /// Generate decoration rects (underline, strikeout, overline) for a block.
 /// `x_offset` and `y_offset` are added when the block is inside a table cell or frame.
+///
+/// Under a [`DimOutside`], the strokes (underline, strikeout, overline and
+/// the spell-check squiggle) are ink and fade with the glyphs they sit
+/// under, cut exactly where those glyphs change; backgrounds do not fade.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_block_decorations(
     block: &BlockLayout,
@@ -18,6 +22,7 @@ pub fn generate_block_decorations(
     available_width: f32,
     default_text_color: [f32; 4],
     scale_factor: f32,
+    dim: Option<&DimOutside>,
 ) -> Vec<DecorationRect> {
     let mut decorations = Vec::new();
 
@@ -77,6 +82,9 @@ pub fn generate_block_decorations(
             let run_width = run.advance_width;
             let stroke = metrics.stroke_size.max(1.0);
             let base_color = decos.foreground_color.unwrap_or(default_text_color);
+            // Strokes go to a scratch list first so a dimmed run can be cut
+            // at its glyphs' bright/dim boundaries in one place.
+            let ink_start = decorations.len();
 
             if has_underline {
                 let underline_color = decos.underline_color.unwrap_or(base_color);
@@ -112,10 +120,80 @@ pub fn generate_block_decorations(
                     kind: DecorationKind::Overline,
                 });
             }
+
+            if let Some(dim) = dim {
+                let segments = ink_segments(run, run_x, block.position, dim);
+                let strokes = decorations.split_off(ink_start);
+                split_by_segments(strokes, &segments, dim, &mut decorations);
+            }
         }
     }
 
     decorations
+}
+
+/// A run's horizontal extent cut into stretches of equal ink alpha, left to
+/// right: `(x_start, x_end, factor)`.
+///
+/// Built from the glyphs' own advances and clusters, so it follows the
+/// visual order of a right-to-left run as the glyphs do. The first stretch
+/// is open to the left and the last to the right, so a stroke that pokes a
+/// little past the glyphs (a wave's last band) is still covered.
+fn ink_segments(
+    run: &crate::shaping::run::ShapedRun,
+    run_x: f32,
+    block_position: usize,
+    dim: &DimOutside,
+) -> Vec<(f32, f32, f32)> {
+    let mut segments: Vec<(f32, f32, f32)> = Vec::new();
+    let mut pen = run_x;
+    for glyph in &run.glyphs {
+        let factor = dim.factor_at(block_position + glyph.cluster as usize);
+        let next = pen + glyph.x_advance;
+        match segments.last_mut() {
+            Some(last) if (last.2 - factor).abs() < f32::EPSILON => last.1 = next,
+            _ => segments.push((pen, next, factor)),
+        }
+        pen = next;
+    }
+    if segments.is_empty() {
+        // No glyphs, no ink to fade: whatever stroke such a run carries is
+        // left as it is.
+        segments.push((run_x, run_x + run.advance_width, 1.0));
+    }
+    if let Some(first) = segments.first_mut() {
+        first.0 = f32::NEG_INFINITY;
+    }
+    if let Some(last) = segments.last_mut() {
+        last.1 = f32::INFINITY;
+    }
+    segments
+}
+
+/// Push each stroke cut along `segments`, each piece faded by the factor of
+/// the stretch it falls in, the way its glyphs are.
+fn split_by_segments(
+    strokes: Vec<DecorationRect>,
+    segments: &[(f32, f32, f32)],
+    dim: &DimOutside,
+    out: &mut Vec<DecorationRect>,
+) {
+    for stroke in strokes {
+        let [x, y, w, h] = stroke.rect;
+        for &(sx0, sx1, factor) in segments {
+            let left = x.max(sx0);
+            let right = (x + w).min(sx1);
+            if right <= left {
+                continue;
+            }
+            let color = dim.fade(stroke.color, factor, true);
+            out.push(DecorationRect {
+                rect: [left, y, right - left, h],
+                color,
+                kind: stroke.kind,
+            });
+        }
+    }
 }
 
 fn get_run_metrics(

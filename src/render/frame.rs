@@ -10,7 +10,7 @@ use crate::layout::flow::{FlowItem, FlowLayout};
 use crate::layout::table::generate_table_decorations;
 use crate::render::cursor::generate_cursor_decorations;
 use crate::render::decoration::generate_block_decorations;
-use crate::types::{CursorDisplay, GlyphQuad, ImageQuad, RenderFrame};
+use crate::types::{CursorDisplay, DimOutside, FlowItemKey, GlyphQuad, ImageQuad, RenderFrame};
 
 /// The content-space cull band `[top, bottom]` a render should keep: the explicit
 /// `render_window` when set (an editor windowing to an outer clip), else the
@@ -53,6 +53,7 @@ pub fn build_render_frame(
     selection_color: [f32; 4],
     text_color: [f32; 4],
     raster_scale: f32,
+    dim: Option<&DimOutside>,
     render_frame: &mut RenderFrame,
     eviction_epoch: &mut u64,
 ) {
@@ -106,10 +107,11 @@ pub fn build_render_frame(
                     continue;
                 }
                 if let Some(table) = flow.tables.get(table_id) {
-                    // Capture table content glyphs/images so rebuild_flat_frame
-                    // can reconstruct them (keyed by table_id).
+                    // Capture table content glyphs/images/decorations so
+                    // rebuild_flat_frame can reconstruct them (keyed by table).
                     let g_start = render_frame.glyphs.len();
                     let i_start = render_frame.images.len();
+                    let d_start = render_frame.decorations.len();
                     let mut key_buf: Vec<GlyphCacheKey> = Vec::new();
                     render_table_cells(
                         table,
@@ -124,16 +126,24 @@ pub fn build_render_frame(
                         text_color,
                         scale_factor,
                         raster_scale,
+                        dim,
                         render_frame,
                         &mut key_buf,
                         eviction_epoch,
                     );
                     let table_g: Vec<GlyphQuad> = render_frame.glyphs[g_start..].to_vec();
                     let table_i: Vec<ImageQuad> = render_frame.images[i_start..].to_vec();
+                    // The cells' own text decorations (underlines, squiggles,
+                    // highlights). Not kept, a block-only render rebuilt the
+                    // frame without them, so every one in a table went missing
+                    // until the next full render.
+                    let table_d = render_frame.decorations[d_start..].to_vec();
+                    let key = FlowItemKey::Table(*table_id);
                     render_frame.glyph_keys.extend_from_slice(&key_buf);
-                    render_frame.block_glyphs.push((*table_id, table_g));
-                    render_frame.block_images.push((*table_id, table_i));
-                    render_frame.block_glyph_keys.push((*table_id, key_buf));
+                    render_frame.block_glyphs.push((key, table_g));
+                    render_frame.block_images.push((key, table_i));
+                    render_frame.block_decorations.push((key, table_d));
+                    render_frame.block_glyph_keys.push((key, key_buf));
 
                     let decos = generate_table_decorations(table, scroll_offset);
                     render_frame.decorations.extend(decos);
@@ -149,10 +159,11 @@ pub fn build_render_frame(
                     continue;
                 }
                 if let Some(frame_layout) = flow.frames.get(frame_id) {
-                    // Capture frame content glyphs/images so rebuild_flat_frame
-                    // can reconstruct them (keyed by frame_id).
+                    // Capture frame content glyphs/images/decorations so
+                    // rebuild_flat_frame can reconstruct them (keyed by frame).
                     let g_start = render_frame.glyphs.len();
                     let i_start = render_frame.images.len();
+                    let d_start = render_frame.decorations.len();
                     let mut key_buf: Vec<GlyphCacheKey> = Vec::new();
                     render_frame_layout(
                         frame_layout,
@@ -165,16 +176,40 @@ pub fn build_render_frame(
                         text_color,
                         scale_factor,
                         raster_scale,
+                        dim,
                         render_frame,
                         &mut key_buf,
                         eviction_epoch,
                     );
                     let frame_g: Vec<GlyphQuad> = render_frame.glyphs[g_start..].to_vec();
                     let frame_i: Vec<ImageQuad> = render_frame.images[i_start..].to_vec();
+                    // Everything the frame's content drew: its blocks' text
+                    // decorations, its nested tables' cell decorations, its
+                    // nested frames' borders. The frame's own border and its
+                    // tables' borders come after, and `rebuild_flat_frame`
+                    // regenerates those itself.
+                    let frame_d = render_frame.decorations[d_start..].to_vec();
+                    let key = FlowItemKey::Frame(*frame_id);
                     render_frame.glyph_keys.extend_from_slice(&key_buf);
-                    render_frame.block_glyphs.push((*frame_id, frame_g));
-                    render_frame.block_images.push((*frame_id, frame_i));
-                    render_frame.block_glyph_keys.push((*frame_id, key_buf));
+                    render_frame.block_glyphs.push((key, frame_g));
+                    render_frame.block_images.push((key, frame_i));
+                    render_frame.block_decorations.push((key, frame_d));
+                    render_frame.block_glyph_keys.push((key, key_buf));
+
+                    // Border + cell-background decorations for tables nested
+                    // anywhere in this frame tree, then the frame's own border.
+                    append_frame_table_decorations(
+                        frame_layout,
+                        0.0,
+                        0.0,
+                        scroll_offset,
+                        &mut render_frame.decorations,
+                    );
+                    append_frame_border_decorations(
+                        frame_layout,
+                        scroll_offset,
+                        &mut render_frame.decorations,
+                    );
                 }
                 continue;
             }
@@ -204,6 +239,7 @@ pub fn build_render_frame(
                 text_color,
                 scale_factor,
                 raster_scale,
+                dim,
                 render_frame,
                 &mut key_buf,
                 eviction_epoch,
@@ -211,9 +247,10 @@ pub fn build_render_frame(
             let block_g: Vec<GlyphQuad> = render_frame.glyphs[g_start..].to_vec();
             let block_i: Vec<ImageQuad> = render_frame.images[i_start..].to_vec();
             render_frame.glyph_keys.extend_from_slice(&key_buf);
-            render_frame.block_glyphs.push((block_id, block_g));
-            render_frame.block_images.push((block_id, block_i));
-            render_frame.block_glyph_keys.push((block_id, key_buf));
+            let key = FlowItemKey::Block(block_id);
+            render_frame.block_glyphs.push((key, block_g));
+            render_frame.block_images.push((key, block_i));
+            render_frame.block_glyph_keys.push((key, key_buf));
 
             let decos = generate_block_decorations(
                 block,
@@ -226,10 +263,9 @@ pub fn build_render_frame(
                 viewport_width,
                 text_color,
                 scale_factor,
+                dim,
             );
-            render_frame
-                .block_decorations
-                .push((block_id, decos.clone()));
+            render_frame.block_decorations.push((key, decos.clone()));
             render_frame.decorations.extend(decos);
 
             // Snapshot block height for incremental render height-change detection
@@ -263,6 +299,49 @@ pub fn build_render_frame(
     render_frame.atlas_eviction_epoch = *eviction_epoch;
 }
 
+/// How much of a run's ink to keep, glyph by glyph, under an optional
+/// [`DimOutside`].
+#[derive(Clone, Copy)]
+pub(crate) enum InkAlpha<'a> {
+    /// Nothing is dimmed.
+    Full,
+    /// The whole run shares one factor (a list marker, dimmed with its block).
+    Fixed { factor: f32, dim: &'a DimOutside },
+    /// Each glyph is dimmed by its own document position:
+    /// `block_position + cluster`. Clusters are block-relative **character**
+    /// offsets once a line is laid out (`paragraph.rs` converts them from
+    /// bytes in a final pass), which is the space `DimOutside` speaks.
+    ByCluster {
+        block_position: usize,
+        dim: &'a DimOutside,
+    },
+}
+
+impl InkAlpha<'_> {
+    /// `color` as the glyph at `cluster` draws it. `is_color` is a colour
+    /// glyph, which can only fade by alpha (see [`DimOutside`]).
+    pub(crate) fn apply(&self, color: [f32; 4], cluster: u32, is_color: bool) -> [f32; 4] {
+        match self {
+            Self::Full => color,
+            Self::Fixed { factor, dim } => dim.fade(color, *factor, !is_color),
+            Self::ByCluster {
+                block_position,
+                dim,
+            } => dim.fade(
+                color,
+                dim.factor_at(block_position + cluster as usize),
+                !is_color,
+            ),
+        }
+    }
+}
+
+/// Document position just past a block's last character: the block's own
+/// text, without the separator that follows it.
+pub(crate) fn block_end(block: &BlockLayout) -> usize {
+    block.position + block.lines.last().map_or(0, |l| l.char_range.end)
+}
+
 /// Render a block's glyphs at the given offset.
 ///
 /// Handles list markers and all lines. The offset is (0, 0) for top-level
@@ -282,6 +361,7 @@ pub(crate) fn render_block_at_offset(
     default_text_color: [f32; 4],
     scale_factor: f32,
     raster_scale: f32,
+    dim: Option<&DimOutside>,
     render_frame: &mut RenderFrame,
     glyph_keys: &mut Vec<GlyphCacheKey>,
     eviction_epoch: &mut u64,
@@ -292,10 +372,19 @@ pub(crate) fn render_block_at_offset(
     // uses `scroll_offset`, so a windowed cull never shifts the glyphs.
     let (cull_top, cull_bottom) = cull_bounds(render_window, scroll_offset, viewport_height);
 
-    // Render list marker on the first line (if present)
+    // Render list marker on the first line (if present). Its glyph clusters
+    // index the marker string ("1.", "•"), not the document, so it is dimmed
+    // as a whole, with its paragraph.
     if let Some(marker) = &block.list_marker
         && let Some(first_line) = block.lines.first()
     {
+        let marker_ink = match dim {
+            Some(d) => InkAlpha::Fixed {
+                factor: d.factor_for_block(block.position, block_end(block)),
+                dim: d,
+            },
+            None => InkAlpha::Full,
+        };
         let baseline_y = offset_y + block.y + first_line.y;
         let content_top = baseline_y - first_line.ascent;
         if content_top + first_line.line_height >= cull_top && content_top <= cull_bottom {
@@ -311,6 +400,7 @@ pub(crate) fn render_block_at_offset(
                 default_text_color,
                 scale_factor,
                 raster_scale,
+                marker_ink,
                 render_frame,
                 glyph_keys,
                 eviction_epoch,
@@ -337,6 +427,13 @@ pub(crate) fn render_block_at_offset(
                 let image_w = positioned_run.shaped_run.advance_width;
                 let image_h = positioned_run.shaped_run.image_height;
                 let image_y = line_y - image_h - scroll_offset;
+                let char_offset = block.position
+                    + positioned_run
+                        .shaped_run
+                        .glyphs
+                        .first()
+                        .map(|g| g.cluster as usize)
+                        .unwrap_or(line.char_range.start);
                 render_frame.images.push(crate::types::ImageQuad {
                     screen: [pen_x, image_y, image_w, image_h],
                     name: image_name.clone(),
@@ -346,13 +443,8 @@ pub(crate) fn render_block_at_offset(
                     // is in character space by the time it reaches a line —
                     // `paragraph.rs` converts every glyph's byte cluster in a
                     // final pass.
-                    char_offset: block.position
-                        + positioned_run
-                            .shaped_run
-                            .glyphs
-                            .first()
-                            .map(|g| g.cluster as usize)
-                            .unwrap_or(line.char_range.start),
+                    char_offset,
+                    opacity: dim.map_or(1.0, |d| d.factor_at(char_offset)),
                 });
                 continue;
             }
@@ -367,6 +459,13 @@ pub(crate) fn render_block_at_offset(
                 }
                 crate::types::VerticalAlignment::Normal => 0.0,
             };
+            let ink = match dim {
+                Some(dim) => InkAlpha::ByCluster {
+                    block_position: block.position,
+                    dim,
+                },
+                None => InkAlpha::Full,
+            };
             render_run_glyphs(
                 &positioned_run.shaped_run,
                 pen_x,
@@ -379,6 +478,7 @@ pub(crate) fn render_block_at_offset(
                 default_text_color,
                 scale_factor,
                 raster_scale,
+                ink,
                 render_frame,
                 glyph_keys,
                 eviction_epoch,
@@ -405,6 +505,7 @@ fn render_table_cells(
     default_text_color: [f32; 4],
     scale_factor: f32,
     raster_scale: f32,
+    dim: Option<&DimOutside>,
     render_frame: &mut RenderFrame,
     glyph_keys: &mut Vec<GlyphCacheKey>,
     eviction_epoch: &mut u64,
@@ -431,6 +532,7 @@ fn render_table_cells(
                 default_text_color,
                 scale_factor,
                 raster_scale,
+                dim,
                 render_frame,
                 glyph_keys,
                 eviction_epoch,
@@ -451,6 +553,7 @@ fn render_table_cells(
                 cell_w,
                 default_text_color,
                 scale_factor,
+                dim,
             );
             render_frame.decorations.extend(decos);
         }
@@ -469,6 +572,7 @@ fn render_frame_layout(
     default_text_color: [f32; 4],
     scale_factor: f32,
     raster_scale: f32,
+    dim: Option<&DimOutside>,
     render_frame: &mut RenderFrame,
     glyph_keys: &mut Vec<GlyphCacheKey>,
     eviction_epoch: &mut u64,
@@ -492,6 +596,7 @@ fn render_frame_layout(
             default_text_color,
             scale_factor,
             raster_scale,
+            dim,
             render_frame,
             glyph_keys,
             eviction_epoch,
@@ -507,6 +612,7 @@ fn render_frame_layout(
             frame.content_width,
             default_text_color,
             scale_factor,
+            dim,
         );
         render_frame.decorations.extend(decos);
     }
@@ -526,6 +632,7 @@ fn render_frame_layout(
             default_text_color,
             scale_factor,
             raster_scale,
+            dim,
             render_frame,
             glyph_keys,
             eviction_epoch,
@@ -549,25 +656,16 @@ fn render_frame_layout(
             default_text_color,
             scale_factor,
             raster_scale,
+            dim,
             render_frame,
             glyph_keys,
             eviction_epoch,
         );
     }
 
-    // Border + cell-background decorations for tables nested anywhere in
-    // this frame tree (recursive — render_nested_frame draws only cell
-    // content).
-    append_frame_table_decorations(
-        frame,
-        0.0,
-        0.0,
-        scroll_offset,
-        &mut render_frame.decorations,
-    );
-
-    // Frame border decorations
-    append_frame_border_decorations(frame, scroll_offset, &mut render_frame.decorations);
+    // The frame's own border and its tables' borders are appended by the
+    // caller, after it has kept what the content above drew: see
+    // `build_render_frame`.
 }
 
 /// Append table border/background decorations for every table nested in
@@ -675,6 +773,7 @@ fn render_nested_frame(
     default_text_color: [f32; 4],
     scale_factor: f32,
     raster_scale: f32,
+    dim: Option<&DimOutside>,
     render_frame: &mut RenderFrame,
     glyph_keys: &mut Vec<GlyphCacheKey>,
     eviction_epoch: &mut u64,
@@ -700,6 +799,7 @@ fn render_nested_frame(
             default_text_color,
             scale_factor,
             raster_scale,
+            dim,
             render_frame,
             glyph_keys,
             eviction_epoch,
@@ -715,6 +815,7 @@ fn render_nested_frame(
             nested.content_width,
             default_text_color,
             scale_factor,
+            dim,
         );
         render_frame.decorations.extend(decos);
     }
@@ -734,6 +835,7 @@ fn render_nested_frame(
             default_text_color,
             scale_factor,
             raster_scale,
+            dim,
             render_frame,
             glyph_keys,
             eviction_epoch,
@@ -755,6 +857,7 @@ fn render_nested_frame(
             default_text_color,
             scale_factor,
             raster_scale,
+            dim,
             render_frame,
             glyph_keys,
             eviction_epoch,
@@ -800,6 +903,7 @@ fn render_run_glyphs(
     default_text_color: [f32; 4],
     scale_factor: f32,
     raster_scale: f32,
+    ink: InkAlpha<'_>,
     render_frame: &mut RenderFrame,
     glyph_keys: &mut Vec<GlyphCacheKey>,
     eviction_epoch: &mut u64,
@@ -882,11 +986,15 @@ fn render_run_glyphs(
             let logical_top = cached.placement_top as f32 * inv_total;
             let screen_x = origin_x + logical_left;
             let screen_y = baseline_y - glyph.y_offset - logical_top - scroll_offset;
-            let color = if cached.is_color {
-                [1.0, 1.0, 1.0, 1.0]
-            } else {
-                run.foreground_color.unwrap_or(default_text_color)
-            };
+            let color = ink.apply(
+                if cached.is_color {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    run.foreground_color.unwrap_or(default_text_color)
+                },
+                glyph.cluster,
+                cached.is_color,
+            );
             render_frame.glyphs.push(GlyphQuad {
                 screen: [screen_x, screen_y, logical_w, logical_h],
                 atlas: [

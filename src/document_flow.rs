@@ -57,9 +57,10 @@ use crate::shaping::shaper::{
     to_harfrust_features,
 };
 use crate::types::{
-    BlockVisualInfo, CharacterGeometry, CursorDisplay, DecorationKind, DecorationRect, GlyphQuad,
-    HitTestResult, LaidOutSpan, LaidOutSpanKind, LayoutGeometry, LineGeometry, LineTruncation,
-    ParagraphResult, RenderFrame, SingleLineResult, TableVisualInfo, TextFormat,
+    BlockVisualInfo, CharacterGeometry, CursorDisplay, DecorationKind, DecorationRect, DimOutside,
+    FlowItemKey, GlyphQuad, HitTestResult, LaidOutSpan, LaidOutSpanKind, LayoutGeometry,
+    LineGeometry, LineTruncation, ParagraphResult, RenderFrame, SingleLineResult, TableVisualInfo,
+    TextFormat,
 };
 
 /// Reasons [`DocumentFlow::relayout_block`] may refuse an
@@ -154,6 +155,19 @@ fn render_window_drifted(now: Option<(f32, f32)>, then: Option<(f32, f32)>) -> b
     }
 }
 
+/// How far a change to the dimmed range reaches into the cached quads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DimChange {
+    /// The quads were built with the current range.
+    None,
+    /// Only positions inside this top-level block are drawn differently.
+    Within(usize),
+    /// Anything wider: turned on or off, a new opacity, or a move to
+    /// another block (or into a table or frame, whose quads are cached as
+    /// one unit).
+    Wide,
+}
+
 pub struct DocumentFlow {
     flow_layout: FlowLayout,
     render_frame: RenderFrame,
@@ -237,6 +251,20 @@ pub struct DocumentFlow {
     layout_scale_generation: u64,
     /// Whether any `layout_*` call has been made at least once.
     has_layout: bool,
+    /// The range kept bright, everything else drawn faded. See
+    /// [`set_dim_outside`](Self::set_dim_outside).
+    dim_outside: Option<DimOutside>,
+    /// The `dim_outside` the cached quads were built with, so the incremental
+    /// paths can tell whether they still hold. Baked into glyph colours,
+    /// image opacities and stroke colours, it is invisible once emitted.
+    rendered_dim: Option<DimOutside>,
+    /// The top-level block that held `rendered_dim`'s range in the layout the
+    /// quads were built from, if one held all of it. Recorded at render time
+    /// because an edit can move blocks under the old range's offsets: after an
+    /// Undo that puts the caret back in an earlier paragraph and grows it, the
+    /// old range's numbers fall inside that paragraph although they belonged to
+    /// the next one. See [`dim_changed_block`](Self::dim_changed_block).
+    rendered_dim_block: Option<usize>,
 }
 
 /// The visual geometry of one resolved block.
@@ -296,6 +324,9 @@ impl DocumentFlow {
             rendered_raster_scale: f32::NAN,
             layout_scale_generation: 0,
             has_layout: false,
+            dim_outside: None,
+            rendered_dim: None,
+            rendered_dim_block: None,
         }
     }
 
@@ -951,6 +982,7 @@ impl DocumentFlow {
             self.selection_color,
             self.text_color,
             densify,
+            self.dim_outside.as_ref(),
             &mut self.render_frame,
             &mut service.eviction_epoch,
         );
@@ -958,6 +990,8 @@ impl DocumentFlow {
         self.rendered_window = self.render_window;
         self.rendered_zoom = self.zoom;
         self.rendered_raster_scale = self.raster_scale;
+        self.rendered_dim = self.dim_outside;
+        self.rendered_dim_block = self.dim_outside.as_ref().and_then(|d| self.dim_block(d));
         apply_zoom(&mut self.render_frame, self.zoom);
         &self.render_frame
     }
@@ -972,8 +1006,10 @@ impl DocumentFlow {
     /// Falls back to a full [`render`](Self::render) if the block's
     /// height changed (subsequent glyph positions would be stale),
     /// if scroll offset or zoom changed since the last full render,
-    /// or if the block lives inside a table / frame (those are
-    /// cached with a different key).
+    /// if the block lives inside a table / frame (those are
+    /// cached with a different key), or if the
+    /// [dimmed range](Self::set_dim_outside) changed anywhere but inside
+    /// this block.
     pub fn render_block_only(
         &mut self,
         service: &mut TextFontService,
@@ -994,6 +1030,15 @@ impl DocumentFlow {
         // primary keep-alive mechanism, this is the safety net.
         if service.eviction_epoch != self.render_frame.atlas_eviction_epoch {
             return self.render(service);
+        }
+
+        // Every other block keeps the quads it was built with, dim baked in,
+        // so a dim change is only safe here when it stays inside this block.
+        // Typing in the bright paragraph is that case: only its end moves.
+        match self.dim_changed_block() {
+            DimChange::None => {}
+            DimChange::Within(changed) if changed == block_id => {}
+            DimChange::Within(_) | DimChange::Wide => return self.render(service),
         }
 
         if !self.flow_layout.blocks.contains_key(&block_id) {
@@ -1035,6 +1080,7 @@ impl DocumentFlow {
         let mut new_glyphs = Vec::new();
         let mut new_images = Vec::new();
         let mut new_keys: Vec<crate::atlas::cache::GlyphCacheKey> = Vec::new();
+        let dim = self.dim_outside;
         if let Some(block) = self.flow_layout.blocks.get(&block_id) {
             let mut tmp = RenderFrame::new();
             crate::render::frame::render_block_at_offset(
@@ -1051,6 +1097,7 @@ impl DocumentFlow {
                 self.text_color,
                 scale_factor,
                 densify,
+                dim.as_ref(),
                 &mut tmp,
                 &mut new_keys,
                 &mut service.eviction_epoch,
@@ -1071,6 +1118,7 @@ impl DocumentFlow {
                 effective_vw,
                 self.text_color,
                 scale_factor,
+                dim.as_ref(),
             )
         } else {
             Vec::new()
@@ -1080,7 +1128,7 @@ impl DocumentFlow {
             .render_frame
             .block_glyphs
             .iter_mut()
-            .find(|(id, _)| *id == block_id)
+            .find(|(key, _)| *key == FlowItemKey::Block(block_id))
         {
             entry.1 = new_glyphs;
         }
@@ -1088,7 +1136,7 @@ impl DocumentFlow {
             .render_frame
             .block_images
             .iter_mut()
-            .find(|(id, _)| *id == block_id)
+            .find(|(key, _)| *key == FlowItemKey::Block(block_id))
         {
             entry.1 = new_images;
         }
@@ -1096,7 +1144,7 @@ impl DocumentFlow {
             .render_frame
             .block_decorations
             .iter_mut()
-            .find(|(id, _)| *id == block_id)
+            .find(|(key, _)| *key == FlowItemKey::Block(block_id))
         {
             entry.1 = new_decos;
         }
@@ -1104,11 +1152,13 @@ impl DocumentFlow {
             .render_frame
             .block_glyph_keys
             .iter_mut()
-            .find(|(id, _)| *id == block_id)
+            .find(|(key, _)| *key == FlowItemKey::Block(block_id))
         {
             entry.1 = new_keys;
         }
 
+        self.rendered_dim = self.dim_outside;
+        self.rendered_dim_block = self.dim_outside.as_ref().and_then(|d| self.dim_block(d));
         self.rebuild_flat_frame(service);
         apply_zoom(&mut self.render_frame, self.zoom);
         &self.render_frame
@@ -1121,12 +1171,23 @@ impl DocumentFlow {
     /// full `render()`. Use when only the cursor blinked or the
     /// selection changed. Falls back to a full [`render`](Self::render)
     /// if the scroll offset or zoom changed in the meantime.
+    ///
+    /// A change to the [dimmed range](Self::set_dim_outside) is honoured
+    /// too, since moving the caret is exactly what moves it: re-rendering
+    /// the one block it changed in when it stayed inside one top-level
+    /// block, everything otherwise.
     pub fn render_cursor_only(&mut self, service: &mut TextFontService) -> &RenderFrame {
         if (self.scroll_offset - self.rendered_scroll_offset).abs() > 0.001
             || render_window_drifted(self.render_window, self.rendered_window)
             || (self.zoom - self.rendered_zoom).abs() > 0.001
         {
             return self.render(service);
+        }
+
+        match self.dim_changed_block() {
+            DimChange::None => {}
+            DimChange::Within(block_id) => return self.render_block_only(service, block_id),
+            DimChange::Wide => return self.render(service),
         }
 
         // Defensive: if any atlas eviction has happened since the last
@@ -2379,6 +2440,70 @@ impl DocumentFlow {
     /// Current default text color.
     pub fn text_color(&self) -> [f32; 4] {
         self.text_color
+    }
+
+    /// Keep one range of the text at full strength and draw everything else
+    /// at reduced opacity, or `None` to draw it all normally. See
+    /// [`DimOutside`] for what is dimmed and what is not.
+    ///
+    /// A property of this view, not of the document: two views of the same
+    /// text each keep their own. Takes effect on the next render; no
+    /// relayout is needed. [`render_cursor_only`](Self::render_cursor_only)
+    /// and [`render_block_only`](Self::render_block_only) notice the change
+    /// and redraw what it touched, so a host can call this on every caret
+    /// move without forcing a full render itself.
+    pub fn set_dim_outside(&mut self, dim: Option<DimOutside>) {
+        self.dim_outside = dim;
+    }
+
+    /// The range currently kept bright, if any.
+    pub fn dim_outside(&self) -> Option<DimOutside> {
+        self.dim_outside
+    }
+
+    /// Classify the difference between the dimmed range the cached quads
+    /// were built with and the current one.
+    ///
+    /// A change confined to one top-level block can be redrawn by
+    /// re-rendering just that block: every other block was faded before and
+    /// is faded now. That holds exactly when the old range and the new one
+    /// each sat wholly inside the **same** block, the old one judged against
+    /// the layout its quads were built from ([`rendered_dim_block`]), the new
+    /// one against the current layout. Comparing the old range's offsets with
+    /// the current layout instead is wrong after an edit that moved the caret
+    /// into another block and grew it (an Undo, a Redo, a drop): those offsets
+    /// would land inside the grown block and leave the block the range left
+    /// painted bright.
+    ///
+    /// [`rendered_dim_block`]: Self::rendered_dim_block
+    fn dim_changed_block(&self) -> DimChange {
+        let (before, now) = match (self.rendered_dim, self.dim_outside) {
+            (None, None) => return DimChange::None,
+            (Some(before), Some(now)) => (before, now),
+            _ => return DimChange::Wide,
+        };
+        match before.changed_hull(&now) {
+            None => return DimChange::None,
+            Some((0, usize::MAX)) => return DimChange::Wide,
+            Some(_) => {}
+        }
+        match (self.rendered_dim_block, self.dim_block(&now)) {
+            (Some(was), Some(is)) if was == is => DimChange::Within(is),
+            _ => DimChange::Wide,
+        }
+    }
+
+    /// The top-level block holding all of `dim`'s range in the current
+    /// layout, if one does. An empty range at a block's end (the caret in an
+    /// empty paragraph) belongs to that block.
+    fn dim_block(&self, dim: &DimOutside) -> Option<usize> {
+        self.flow_layout
+            .blocks
+            .values()
+            .find(|block| {
+                block.position <= dim.start && dim.end <= crate::render::frame::block_end(block)
+            })
+            .map(|block| block.block_id)
     }
 
     /// Set the background painted behind fenced code blocks when the
