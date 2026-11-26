@@ -1,0 +1,27 @@
+# Advisories `cargo audit` may skip, each one checked against how text-typeset
+# and the text-document crates it builds on actually use the crate. Every entry
+# needs a crate we don't own to move before it can be fixed; delete it as soon
+# as that happens. Anything new still fails the Security Audit workflow.
+
+[advisories]
+ignore = [
+    # zip 6.0.0 (epub-builder 0.8.3) and zip 8.6.0 (docx-rs 0.4.22), both pulled
+    # in by text-document's default DOCX and EPUB exporters. text-document's own
+    # ODT container is on zip 9, which is patched. Neither older copy can be
+    # moved until epub-builder and docx-rs release on zip 9. Not reachable:
+    # text-typeset calls no exporter or importer, and text-document only ever
+    # writes archives (`ZipWriter`, `Docx::build`, `EpubBuilder`), never calls
+    # `docx_rs::read_docx`, the only place either copy reads one.
+    # - extraction (`ZipArchive::extract`): nothing extracts an archive;
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+    "RUSTSEC-2026-0429",
+    "RUSTSEC-2026-0546",
+    # - AES entries: the `aes-crypto` feature is off, so they are never decrypted;
+    "RUSTSEC-2026-0545",
+    # - Shrink/Reduce/Implode: the `legacy-zip` feature is off;
+    "RUSTSEC-2026-0547",
+    # - `ZipStreamReader`: never used, nothing reads an archive.
+    "RUSTSEC-2026-0548",
+]
